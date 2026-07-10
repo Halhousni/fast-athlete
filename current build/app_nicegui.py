@@ -1,15 +1,12 @@
 """
 FAST — Muscle Fatigue Check  (NiceGUI edition)
 Filter & Aggregate Synchrosqueezed Transform
-
-NiceGUI gives us native UI state — no re-computation on slider moves,
-no fragile session_state, element-level updates instead of full re-renders.
 """
 from __future__ import annotations
+import asyncio
 import io
 import time
 import re
-import traceback
 
 import numpy as np
 import scipy.io
@@ -285,16 +282,9 @@ html, body { font-family: 'DM Sans', sans-serif; }
 def main_page():
     ui.add_head_html(GLOBAL_CSS)
 
-    # ── App state (persists across interactions — no re-renders) ──
-    app = {
-        'data_df': None,
-        'fs': 1000,
-        'muscle_cols': [],
-        'results': {},       # label -> {Tx, ssq, mif, status, detail}
-        'crop': (0.0, 30.0),
-    }
+    app = dict(data_df=None, fs=1000, muscle_cols=[], results={}, crop=(0, 30))
 
-    # ── HEADER ────────────────────────────────────────────────────────
+    # ── HEADER ──
     ui.html("""
     <div class="page-header">
         <div class="page-header-title">FA<span>ST</span></div>
@@ -302,23 +292,19 @@ def main_page():
                     text-transform:uppercase">Muscle Fatigue Check</div>
     </div>""", sanitize=False)
 
-    # ── CONTAINERS (created once, updated in-place) ───────────────────
+    # ── DYNAMIC SECTIONS ──
     upload_zone = ui.column().classes('w-full')
-    summary_row = ui.row().classes('w-full gap-4')
-    time_section = ui.column().classes('w-full')
-    run_section = ui.column().classes('w-full')
-    results_section = ui.column().classes('w-full')
-    coach_section = ui.column().classes('w-full')
+    after_upload = ui.column().classes('w-full')
+    results_zone = ui.column().classes('w-full')
 
-    # ── UPLOAD ────────────────────────────────────────────────────────
+    # ── UPLOAD ──
     async def on_upload(e):
+        upload_zone.clear()
         with upload_zone:
-            upload_zone.clear()
-            spinner = ui.spinner(size='lg')
-            ui.label('Reading your file…').classes('text-gray-500')
+            ui.spinner(size='lg')
+            ui.label('Reading your file…')
 
         data = await e.file.read()
-        # Wrap for _load_file which expects .name and .content.read()
         wrapper = type('W', (), {
             'name': e.file.name,
             'content': type('C', (), {'read': lambda self=None: data})()
@@ -327,169 +313,122 @@ def main_page():
         try:
             df, det_fs = _load_file(wrapper)
         except Exception as ex:
+            upload_zone.clear()
             with upload_zone:
-                upload_zone.clear()
-                ui.label(f'⚠ Could not read file: {ex}').classes('text-red-500')
+                ui.label(f'Error: {ex}').classes('text-red-500')
             return
 
         if df is None or df.empty:
+            upload_zone.clear()
             with upload_zone:
-                upload_zone.clear()
-                ui.label('⚠ No numeric data found.').classes('text-red-500')
+                ui.label('No numeric data found').classes('text-red-500')
             return
 
         app['data_df'] = df
         app['fs'] = int(det_fs) if det_fs else 1000
         app['muscle_cols'] = _muscle_columns(df)
         app['results'] = {}
-        app['crop'] = (0.0, 30.0)
+        app['crop'] = (0.0, min(30.0, len(df) / app['fs']))
 
-        _show_summary(app, summary_row)
-        _show_time_slider(app, time_section)
-        _show_run_button(app, run_section, results_section)
-        results_section.clear()
-        _build_coach_tools(app, coach_section)
-
-        with upload_zone:
-            upload_zone.clear()
-            ui.label(f'✅ Loaded — {len(app["muscle_cols"])} muscles, '
-                     f'{app["fs"]} Hz').classes('text-green-600 text-sm')
+        _build_controls(app, upload_zone, after_upload, results_zone)
 
     upload_zone.clear()
-    ui.upload(
-        label='Drop your sEMG recording here',
-        on_upload=on_upload,
-        auto_upload=True,
-    ).classes('w-full').props('accept=.csv,.txt,.mat')
-
-    # ── COACH TOOLS (always show at bottom, collapsed) ────────────────
-    _build_coach_tools(app, coach_section)
+    with upload_zone:
+        ui.upload(
+            label='Drop your sEMG recording here',
+            on_upload=on_upload,
+            auto_upload=True,
+        ).classes('w-full').props('accept=.csv,.txt,.mat')
 
 
-# ═══════════════════════════════════════════════════════════════════════
-# UI BUILDERS  (called in-place — no re-renders)
-# ═══════════════════════════════════════════════════════════════════════
-
-def _show_summary(app, container):
-    container.clear()
+def _build_controls(app, upload_zone, after_upload, results_zone):
     cols = app['muscle_cols']
-    if not cols:
-        return
-    fs = app['fs']
-    ref_len = len(app['data_df'][cols[0]].values)
-    dur = ref_len / fs
-
-    with container:
-        ui.label(f'Muscles found: {len(cols)}').classes('text-sm text-gray-500')
-        ui.label(f'Sampling rate: {fs} Hz').classes('text-sm text-gray-500')
-        ui.label(f'Duration: {dur:.1f} s').classes('text-sm text-gray-500')
-        short = ', '.join(cols[:3]) + (f' +{len(cols)-3}' if len(cols) > 3 else '')
-        ui.label(f'Channels: {short}').classes('text-sm text-gray-500')
-
-
-def _show_time_slider(app, container):
-    container.clear()
-    cols = app['muscle_cols']
-    if not cols:
-        return
     fs = app['fs']
     ref_len = len(app['data_df'][cols[0]].values)
     total_dur = ref_len / fs
+    crop = app['crop']
 
-    with container:
-        ui.label('Which part of the recording?').classes('text-sm font-medium mt-4')
+    upload_zone.clear()
+    with upload_zone:
+        ui.label(f'Loaded {len(cols)} muscles · {fs} Hz · {total_dur:.0f}s')
+        ui.label(', '.join(cols[:4]) + (f' +{len(cols)-4}' if len(cols) > 4 else ''))
+
+    # ── TIME WINDOW ──
+    after_upload.clear()
+    results_zone.clear()
+
+    with after_upload:
+        ui.label('Select time window:').classes('font-medium mt-2')
         slider = ui.range_slider(
             min=0, max=total_dur,
-            value={'min': app['crop'][0], 'max': app['crop'][1]},
-            step=0.5,
-        ).props('label-always').classes('w-full')
+            value={'min': crop[0], 'max': crop[1]},
+            step=0.5
+        ).classes('w-full')
 
-        def on_slider_change():
+        status = ui.label().classes('text-sm text-gray-500')
+
+        def _update_status():
             v = slider.value
             app['crop'] = (v['min'], v['max'])
-            window_dur = v['max'] - v['min']
-            duration_label.set_text(
-                f'Analysing {v["min"]:.0f}s – {v["max"]:.0f}s  '
-                f'({window_dur:.1f}s of data)')
+            status.set_text(f'{v["min"]:.0f}s – {v["max"]:.0f}s  ({v["max"] - v["min"]:.0f}s)')
 
-        slider.on('change', on_slider_change)
-        duration_label = ui.label(
-            f'Analysing {app["crop"][0]:.0f}s – {app["crop"][1]:.0f}s  '
-            f'({app["crop"][1] - app["crop"][0]:.1f}s of data)'
-        ).classes('text-xs text-gray-400')
+        slider.on('change', _update_status)
+        _update_status()
 
+        # ── BIG RUN BUTTON ──
+        async def _on_run():
+            results_zone.clear()
+            s0 = max(int(app['crop'][0] * fs), 0)
+            s1 = min(int(app['crop'][1] * fs), ref_len)
+            if s0 >= s1:
+                s0, s1 = 0, min(5000, ref_len)
+            app['s0'] = s0
+            app['s1'] = s1
+            app['crop_used'] = app['crop']
 
-def _show_run_button(app, container, results_container):
-    container.clear()
-    if not app['muscle_cols']:
-        return
+            # Show progress area
+            with results_zone:
+                progress = ui.linear_progress(0).classes('w-full')
+                msg = ui.label('Starting…').classes('text-sm text-gray-600')
 
-    async def on_run():
-        container.clear()
-        results_container.clear()
+            results = {}
+            n = len(cols)
 
-        fs = app['fs']
-        crop = app['crop']
-        s0 = max(int(crop[0] * fs), 0)
-        ref_len = len(app['data_df'][app['muscle_cols'][0]].values)
-        s1 = min(int(crop[1] * fs), ref_len)
-        if s0 >= s1:
-            s0, s1 = 0, min(5000, ref_len)
+            for i, col in enumerate(cols):
+                sig = app['data_df'][col].values[s0:s1].astype(float)
+                if np.isnan(sig).any() or np.isinf(sig).any():
+                    results[col] = dict(Tx=None, ssq=None, mif=np.nan, status='grey',
+                                        detail='Bad data', label=col)
+                elif np.std(sig) < 1e-10:
+                    results[col] = dict(Tx=None, ssq=None, mif=np.nan, status='grey',
+                                        detail='Flat', label=col)
+                else:
+                    msg.set_text(f'Analysing {col} ({i+1}/{n})…')
+                    await asyncio.sleep(0)  # flush UI
+                    try:
+                        Tx_fast, _, ssq_freqs = await run.cpu_bound(
+                            _run_fast, sig, fs, 1.0, 35.0, 1.0, 32)
+                        mif, st, detail = _classify_fatigue(Tx_fast, ssq_freqs)
+                        results[col] = dict(Tx=Tx_fast, ssq=ssq_freqs, mif=mif,
+                                            status=st, detail=detail, label=col)
+                    except Exception as e:
+                        results[col] = dict(Tx=None, ssq=None, mif=np.nan, status='grey',
+                                            detail=str(e)[:60], label=col)
+                progress.set_value((i + 1) / n)
+                await asyncio.sleep(0)  # flush UI
 
-        with container:
-            progress = ui.linear_progress(0).classes('w-full')
-            status_label = ui.label('Starting analysis…').classes('text-sm text-gray-500')
+            app['results'] = results
+            results_zone.clear()
+            _show_results(app, results_zone)
 
-        results = {}
-        n = len(app['muscle_cols'])
-
-        for i, col in enumerate(app['muscle_cols']):
-            sig = app['data_df'][col].values[s0:s1].astype(float)
-
-            if np.isnan(sig).any() or np.isinf(sig).any():
-                results[col] = dict(Tx=None, ssq=None, mif=np.nan,
-                                    status='grey', detail='NaN/Inf', label=col)
-            elif np.std(sig) < 1e-10:
-                results[col] = dict(Tx=None, ssq=None, mif=np.nan,
-                                    status='grey', detail='Flat signal', label=col)
-            else:
-                status_label.set_text(f'Processing {col}…')
-                try:
-                    Tx_fast, _, ssq_freqs = await run.cpu_bound(
-                        _run_fast, sig, fs, 1.0, 35.0, 1.0, 32)
-                    mif, st, detail = _classify_fatigue(
-                        Tx_fast, ssq_freqs)
-                    results[col] = dict(Tx=Tx_fast, ssq=ssq_freqs,
-                                        mif=mif, status=st,
-                                        detail=detail, label=col)
-                except Exception as e:
-                    results[col] = dict(Tx=None, ssq=None, mif=np.nan,
-                                        status='grey', detail=str(e)[:60],
-                                        label=col)
-
-            progress.set_value((i + 1) / n)
-            await ui.run_javascript('')  # yield to let UI update
-
-        app['results'] = results
-        app['s0'] = s0
-        app['s1'] = s1
-        app['crop_used'] = crop
-
-        container.clear()
-        _show_results(app, results_container)
-
-    ui.button('🏃 Check My Muscles', on_click=on_run).props('color=primary')
+        ui.button('Check My Muscles', on_click=_on_run)\
+            .props('color=primary size=xl').classes('w-full mt-4')
 
 
 def _show_results(app, container):
-    container.clear()
     results = app['results']
-    if not results:
-        return
-
     with container:
-        ui.markdown('## Your Muscle Status')
-
+        ui.markdown('## Results')
         html = '<div class="fatigue-grid">'
         for col, r in results.items():
             html += _traffic_light_html(r['label'], r['status'], r['detail'])
@@ -497,213 +436,43 @@ def _show_results(app, container):
         ui.html(html, sanitize=False)
 
         ui.html("""
-        <div class="legend" style="display:flex;gap:1.5rem;flex-wrap:wrap;
-                    margin-top:0.5rem">
-            <span>🟢 Green = No fatigue detected</span>
+        <div class="legend" style="display:flex;gap:1.5rem;flex-wrap:wrap;margin-top:0.5rem;
+                    font-size:0.8rem;color:#64748b">
+            <span>🟢 Green = No fatigue</span>
             <span>🟡 Amber = Some fatigue</span>
             <span>🔴 Red   = Fatigued</span>
-            <span>⚫ Grey  = Could not analyse</span>
+            <span>⚫ Grey  = No data</span>
         </div>""", sanitize=False)
 
         # Spectrograms
-        with ui.expansion('📊 See detailed spectrograms', value=False):
+        with ui.expansion('View spectrograms', value=False):
             t_axis = np.arange(app['s1'] - app['s0']) / app['fs'] + app['crop_used'][0]
             for col, r in results.items():
                 if r['Tx'] is None:
-                    ui.label(f"{r['label']}: skipped — {r['detail']}").classes('text-xs text-gray-400')
+                    ui.label(f'{r["label"]}: skipped').classes('text-xs text-gray-400')
                     continue
                 band = (r['ssq'] >= 1.0) & (r['ssq'] <= 35.0)
                 fp = r['ssq'][band]
                 e = np.abs(r['Tx'][band, :]) ** 2
                 e /= (e.max() + 1e-12)
-                fig, ax = plt.subplots(figsize=(10, 2.6))
-                ax.pcolormesh(t_axis, fp, e,
-                              norm=mcolors.PowerNorm(gamma=0.3),
+                fig, ax = plt.subplots(figsize=(10, 2.2))
+                ax.pcolormesh(t_axis, fp, e, norm=mcolors.PowerNorm(gamma=0.3),
                               cmap=parula_cmap, shading='auto')
-                ax.set_ylabel('Frequency (Hz)', fontsize=9)
-                ax.set_xlabel('Time (s)', fontsize=9)
+                ax.set_ylabel('Hz', fontsize=9)
                 ax.set_ylim(1, 35)
-                ax.set_title(f"FAST — {r['label']}", fontsize=10, fontweight='bold')
+                ax.set_title(r['label'], fontsize=10, fontweight='bold')
                 plt.tight_layout()
                 ui.pyplot(fig, close_figure=True)
 
-        # Download
+        # Download CSV
         rows = [{'Muscle': r['label'],
                  'MIF (Hz)': f"{r['mif']:.2f}" if not np.isnan(r['mif']) else 'N/A',
-                 'Status': r['status'].capitalize(),
-                 'Detail': r['detail']}
+                 'Status': r['status'].capitalize()}
                 for r in results.values()]
         buf = io.StringIO()
         pd.DataFrame(rows).to_csv(buf, index=False)
-        ui.download(
-            buf.getvalue().encode(),
-            filename='fatigue_report.csv',
-            media_type='text/csv',
-        ).props('label="⬇ Download Report (CSV)" flat')
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# COACH TOOLS  (advanced analysis — collapsed by default)
-# ═══════════════════════════════════════════════════════════════════════
-
-def _build_coach_tools(app, container):
-    container.clear()
-    with ui.expansion('🔬 Coach Tools — Advanced Analysis', value=False).classes('w-full mt-4'):
-        ui.label(
-            'For coaches, clinicians, and researchers. '
-            'Tune FAST parameters, test with synthetic signals, '
-            'compare WSST vs FAST spectrograms.'
-        ).classes('text-xs text-gray-500')
-
-        src = ui.radio(
-            ['Use uploaded data', 'Synthetic test'],
-            value='Synthetic test',
-        ).props('inline')
-
-        coach_state = {'src': 'Synthetic test'}
-
-        def on_src_change():
-            coach_state['src'] = src.value
-            _rebuild_coach_controls(app, coach_controls, coach_state)
-
-        src.on('change', on_src_change)
-
-        coach_controls = ui.column().classes('w-full')
-        coach_results = ui.column().classes('w-full')
-        _rebuild_coach_controls(app, coach_controls, coach_state)
-
-        async def on_run_advanced():
-            coach_results.clear()
-            if coach_state['src'] == 'Synthetic test':
-                dur = coach_state.get('dur', 2)
-                sr = coach_state.get('sr', 1000)
-                t_s = np.linspace(0, dur, int(dur * sr))
-                sig = (0.5 * np.sin(2 * np.pi * 20 * t_s) +
-                       0.8 * np.sin(2 * np.pi * 25 * t_s) +
-                       0.6 * np.sin(2 * np.pi * 60 * t_s))
-                signals = {'Synthetic': sig}
-                sr_used = sr
-                t_arr = t_s
-            else:
-                if app['data_df'] is None:
-                    ui.notify('Upload a file first', type='warning')
-                    return
-                cols = coach_state.get('sel', [])
-                if not cols:
-                    return
-                cr = coach_state.get('ct_crop', {'min': 0.0, 'max': 5.0})
-                s0 = max(int(cr['min'] * app['fs']), 0)
-                ref = app['data_df'][cols[0]].values
-                s1 = min(int(cr['max'] * app['fs']), len(ref))
-                if s0 >= s1:
-                    s0, s1 = 0, min(1000, len(ref))
-                t_arr = np.arange(s1 - s0) / app['fs'] + cr['min']
-                signals = {c: app['data_df'][c].values[s0:s1] for c in cols}
-                sr_used = app['fs']
-
-            f_min = coach_state.get('f_min', 8)
-            f_max = coach_state.get('f_max', 100)
-            df_step = coach_state.get('df_step', 1.0)
-            freq_steps = np.arange(f_min, f_max, df_step)
-
-            n_plots = len(signals) * 2
-            fig, axes = plt.subplots(n_plots, 1, figsize=(12, 5 * n_plots),
-                                     sharex=True, constrained_layout=True)
-            if n_plots == 1:
-                axes = [axes]
-
-            t0 = time.time()
-            for idx, (col, sig) in enumerate(signals.items()):
-                if np.isnan(sig).any() or np.isinf(sig).any():
-                    continue
-                if np.std(sig) < 1e-10:
-                    continue
-
-                Tx_orig, _, ssq, _ = ssq_cwt(
-                    sig, fs=sr_used, nv=32, wavelet=('morlet', {'mu': 6}))
-
-                W_agg = await run.cpu_bound(
-                    _fast_aggregate, sig, sr_used, freq_steps, 32)
-
-                mp = np.mean(np.abs(Tx_orig) ** 2)
-                mask = (np.abs(Tx_orig) ** 2 > 0.9 * mp).astype(float)
-                Tx_f = (W_agg if W_agg is not None
-                        else np.zeros_like(Tx_orig, dtype=complex)) * mask
-                mf = (ssq >= f_min) & (ssq <= f_max)
-                fp = ssq[mf]
-
-                ax0 = axes[idx * 2]
-                e0 = np.abs(Tx_orig[mf, :]) ** 2
-                e0 /= e0.max() + 1e-12
-                ax0.pcolormesh(t_arr, fp, e0, norm=mcolors.PowerNorm(0.3),
-                               cmap=parula_cmap, shading='auto')
-                ax0.set_ylabel('Frequency (Hz)', fontsize=11)
-                ax0.set_title(f'Standard WSST: {col}', fontsize=12, fontweight='bold')
-                ax0.set_ylim(f_min, f_max)
-
-                ax1 = axes[idx * 2 + 1]
-                e1 = np.abs(Tx_f[mf, :]) ** 2
-                e1 /= e1.max() + 1e-12
-                ax1.pcolormesh(t_arr, fp, e1, norm=mcolors.PowerNorm(0.3),
-                               cmap=parula_cmap, shading='auto')
-                ax1.set_ylabel('Frequency (Hz)', fontsize=11)
-                ax1.set_title(f'FAST Result: {col}', fontsize=12, fontweight='bold')
-                ax1.set_ylim(f_min, f_max)
-                if idx * 2 + 1 == n_plots - 1:
-                    ax1.set_xlabel('Time (s)', fontsize=11)
-
-            with coach_results:
-                ui.label(f'{len(freq_steps)} bands · {time.time() - t0:.2f}s').classes('text-sm text-green-600')
-                ui.pyplot(fig, close_figure=True)
-                b = io.BytesIO()
-                fig.savefig(b, format='png', dpi=300)
-                b.seek(0)
-                ui.download(b.getvalue(), 'FAST_advanced.png', 'image/png').props('label="🖼️ Download PNG" flat')
-
-        ui.button('🚀 Run Advanced Analysis', on_click=on_run_advanced).props('color=secondary')
-
-
-def _rebuild_coach_controls(app, container, coach_state):
-    container.clear()
-    if coach_state['src'] == 'Synthetic test':
-        with container:
-            dur = ui.number('Duration (s)', value=2, min=1, max=10)
-            sr = ui.number('Sampling rate (Hz)', value=1000, min=100)
-            coach_state['dur'] = dur.value
-            coach_state['sr'] = sr.value
-            dur.on('change', lambda: coach_state.update(dur=dur.value))
-            sr.on('change', lambda: coach_state.update(sr=sr.value))
-    else:
-        if app['data_df'] is None:
-            with container:
-                ui.label('Upload a file above first.').classes('text-sm text-gray-400')
-            return
-        cols = _muscle_columns(app['data_df'])
-        with container:
-            sel = ui.select(cols, value=cols[0] if cols else None,
-                           label='Channel', multiple=True)
-            coach_state['sel'] = sel.value or []
-            sel.on('change', lambda: coach_state.update(sel=sel.value or []))
-
-            ref = app['data_df'][cols[0]].values
-            tdur = len(ref) / app['fs']
-            cr = ui.range_slider(min=0, max=tdur,
-                                 value={'min': 0.0, 'max': min(tdur, 5.0)},
-                                 step=0.5, label='Time range (s)')
-            coach_state['ct_crop'] = cr.value
-            cr.on('change', lambda: coach_state.update(ct_crop=cr.value))
-
-    with container:
-        f_min = ui.number('Min freq (Hz)', value=8, min=1)
-        f_max = ui.number('Max freq (Hz)', value=100, min=2)
-        df_step = ui.number('Step (Hz)', value=1.0, min=0.5, step=0.5)
-        coach_state['f_min'] = f_min.value
-        coach_state['f_max'] = f_max.value
-        coach_state['df_step'] = df_step.value
-        f_min.on('change', lambda: coach_state.update(f_min=f_min.value))
-        f_max.on('change', lambda: coach_state.update(f_max=f_max.value))
-        df_step.on('change', lambda: coach_state.update(df_step=df_step.value))
-        ui.label('Filter band: f−1 to f+2 Hz  ·  Powered by ssqueezepy').classes('text-xs text-gray-400')
+        ui.download(buf.getvalue().encode(), 'fatigue_report.csv', 'text/csv')\
+            .props('label="Download Report (CSV)" flat')
 
 
 # ═══════════════════════════════════════════════════════════════════════
