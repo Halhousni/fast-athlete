@@ -8,7 +8,7 @@
 # ============================================================
 
 # --- Stage 1: build wheels for compiled packages ---
-FROM python:3.9-slim AS builder
+FROM python:3.12-slim AS builder
 
 RUN apt-get update && apt-get install -y \
     build-essential \
@@ -25,7 +25,7 @@ RUN pip wheel --no-cache-dir --wheel-dir /wheels \
     gpu-compute
 
 # --- Stage 2: slim runtime image ---
-FROM python:3.9-slim
+FROM python:3.12-slim
 
 # ---- GPU runtime ----
 # gpu-runtime-lib = loader that dispatches to the vendor driver
