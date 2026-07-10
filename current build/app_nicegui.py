@@ -311,13 +311,21 @@ def main_page():
     coach_section = ui.column().classes('w-full')
 
     # ── UPLOAD ────────────────────────────────────────────────────────
-    def on_upload(e):
+    async def on_upload(e):
         with upload_zone:
             upload_zone.clear()
             spinner = ui.spinner(size='lg')
             ui.label('Reading your file…').classes('text-gray-500')
+
+        data = await e.file.read()
+        # Wrap for _load_file which expects .name and .content.read()
+        wrapper = type('W', (), {
+            'name': e.file.name,
+            'content': type('C', (), {'read': lambda self=None: data})()
+        })()
+
         try:
-            df, det_fs = _load_file(e)
+            df, det_fs = _load_file(wrapper)
         except Exception as ex:
             with upload_zone:
                 upload_zone.clear()
