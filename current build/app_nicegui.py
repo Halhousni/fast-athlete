@@ -294,7 +294,7 @@ def main_page():
         <div class="page-header-title">FA<span>ST</span></div>
         <div style="font-size:0.82rem;color:#94a3b8;letter-spacing:0.06em;
                     text-transform:uppercase">Muscle Fatigue Check</div>
-    </div>""")
+    </div>""", sanitize=False)
 
     # ── CONTAINERS (created once, updated in-place) ───────────────────
     upload_zone = ui.column().classes('w-full')
@@ -480,7 +480,7 @@ def _show_results(app, container):
         for col, r in results.items():
             html += _traffic_light_html(r['label'], r['status'], r['detail'])
         html += '</div>'
-        ui.html(html)
+        ui.html(html, sanitize=False)
 
         ui.html("""
         <div class="legend" style="display:flex;gap:1.5rem;flex-wrap:wrap;
@@ -489,7 +489,7 @@ def _show_results(app, container):
             <span>🟡 Amber = Some fatigue</span>
             <span>🔴 Red   = Fatigued</span>
             <span>⚫ Grey  = Could not analyse</span>
-        </div>""")
+        </div>""", sanitize=False)
 
         # Spectrograms
         with ui.expansion('📊 See detailed spectrograms', value=False):
