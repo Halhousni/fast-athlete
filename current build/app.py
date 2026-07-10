@@ -24,12 +24,6 @@ GLOBAL_CSS = """
 html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
 #MainMenu, footer { visibility: hidden; }
 
-/* ── WHITE BACKGROUND ── */
-.stApp, [data-testid="stAppViewContainer"], .main, section[data-testid="stSidebar"] {
-    background-color: #ffffff;
-}
-.stApp > header { background-color: #ffffff; }
-
 /* ── SPLASH ── */
 .splash-wrap {
     min-height: 80vh; display: flex; flex-direction: column;

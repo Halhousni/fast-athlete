@@ -1,7 +1,8 @@
 __pycache__/
 *.pyc
 *.pyo
-.streamlit/
+.streamlit/*
+!.streamlit/config.toml
 *.egg-info/
 dist/
 build/
