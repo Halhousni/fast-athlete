@@ -490,7 +490,10 @@ def _show_results(app, container):
                 ax.set_ylim(1, 35)
                 ax.set_title(r['label'], fontsize=10, fontweight='bold')
                 plt.tight_layout()
-                ui.pyplot(fig, close=True)
+                svg = io.StringIO()
+                fig.savefig(svg, format='svg')
+                plt.close(fig)
+                ui.html(svg.getvalue(), sanitize=False)
 
         rows = [{'Muscle': r['label'],
                  'MIF (Hz)': f"{r['mif']:.2f}" if not np.isnan(r['mif']) else 'N/A',
