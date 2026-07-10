@@ -359,7 +359,7 @@ def _build_controls(app, upload_zone, after_upload, results_zone):
 
     with after_upload:
         ui.label('Select time window:').classes('font-medium mt-2')
-        slider = ui.range_slider(
+        slider = ui.range(
             min=0, max=total_dur,
             value={'min': crop[0], 'max': crop[1]},
             step=0.5
