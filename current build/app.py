@@ -1,3 +1,5 @@
+# FAST — Filter & Aggregate Synchrosqueezed Transform
+# Version: 2025-07-10  ·  git push → auto-deploy
 import streamlit as st
 import numpy as np
 import scipy.io
