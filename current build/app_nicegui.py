@@ -128,21 +128,27 @@ def _load_file(uploaded_file):
         raw = content.decode('utf-8', errors='replace')
         for line in raw.splitlines()[:20]:
             m = re.search(
-                r'(?:fs|sample.?rate|sampling.?rate)[^\d]*(\d+(?:\.\d+)?)',
+                r'(?:fs|freq|sample.?rate|sampling.?rate)[^\d]*(\d+(?:\.\d+)?)',
                 line, re.I)
             if m:
                 detected_fs = float(m.group(1))
                 break
+        df = None
         for sep in [',', '\t', ';']:
-            try:
-                df_try = pd.read_csv(BytesIO(content), sep=sep,
-                                     engine='python', comment='#')
-                nc = df_try.select_dtypes(include=[np.number]).columns
-                if len(nc) >= 1:
-                    df = df_try[nc]
-                    break
-            except Exception:
-                pass
+            # Auto-detect skip rows for files with metadata headers
+            for skip in range(6):
+                try:
+                    df_try = pd.read_csv(BytesIO(content), sep=sep,
+                                         engine='python', comment='#',
+                                         skiprows=skip, on_bad_lines='skip')
+                    nc = df_try.select_dtypes(include=[np.number]).columns
+                    if len(nc) >= 1:
+                        df = df_try[nc]
+                        break
+                except Exception:
+                    pass
+            if df is not None:
+                break
         if df is not None:
             df.columns = [c.replace('"', '').strip() for c in df.columns]
             data_df = df.apply(pd.to_numeric, errors='coerce').fillna(0)
