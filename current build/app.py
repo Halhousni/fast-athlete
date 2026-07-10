@@ -11,7 +11,7 @@ import time
 import re
 from scipy.signal import butter, filtfilt
 
-import custom_wsst
+from ssqueezepy import ssq_cwt
 
 # ──────────────────────────────────────────────────────────────────────────────
 # GLOBAL STYLE
@@ -167,8 +167,8 @@ def process_single_band(f1, x, fs, voices_per_octave=32, order=4):
         return None
     scipy_order = max(1, order // 2)
     b, a = butter(scipy_order, [filband1 / nyq, filband2 / nyq], btype='band')
-    Tx, _, _, _ = custom_wsst.ssq_cwt(filtfilt(b, a, x), fs=fs,
-                                       voices_per_octave=voices_per_octave)
+    Tx, _, _, _ = ssq_cwt(filtfilt(b, a, x), fs=fs,
+                           nv=voices_per_octave, wavelet=('morlet', {'mu': 6}))
     return Tx
 
 
@@ -196,8 +196,8 @@ def run_fast(sig, fs, f_min, f_max, df_step=1.0,
              voices_per_octave=32, progress_callback=None):
     """Full FAST pipeline → (Tx_fast, Tx_orig, ssq_freqs)."""
     freq_steps = np.arange(f_min, f_max, df_step)
-    Tx_orig, _, ssq_freqs, _ = custom_wsst.ssq_cwt(
-        sig, fs=fs, voices_per_octave=voices_per_octave)
+    Tx_orig, _, ssq_freqs, _ = ssq_cwt(
+        sig, fs=fs, nv=voices_per_octave, wavelet=('morlet', {'mu': 6}))
     W_agg = fast_sequential_aggregate(
         sig, fs, freq_steps, voices_per_octave=voices_per_octave,
         progress_callback=progress_callback)
@@ -376,11 +376,8 @@ def page_splash():
             st.session_state.page = 'advanced'
             st.rerun()
 
-    binfo = custom_wsst.backend_info()
-    tag = (f"⚡ {binfo['device']} · {binfo['backend']} · {binfo['memory_mb']} MB"
-           if binfo['backend'] != 'numpy' else "🖥️ CPU (no GPU detected)")
     st.markdown(f"<p style='text-align:center;color:#94a3b8;font-size:0.78rem;"
-                f"margin-top:1.2rem'>{tag}</p>", unsafe_allow_html=True)
+                f"margin-top:1.2rem'>Ready</p>", unsafe_allow_html=True)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -610,7 +607,6 @@ def page_basic():
 
 def page_advanced():
     st.markdown(GLOBAL_CSS, unsafe_allow_html=True)
-    binfo = custom_wsst.backend_info()
 
     st.markdown("""
     <div class="page-header">
@@ -620,10 +616,6 @@ def page_advanced():
     if st.button("← Home", key="back_adv"):
         st.session_state.page = 'splash'
         st.rerun()
-
-    gpu_tag = (f"⚡ {binfo['device']}  ({binfo['backend']}, {binfo['memory_mb']} MB)"
-               if binfo['backend'] != 'numpy' else "🖥️ CPU (no GPU detected)")
-    st.caption(gpu_tag)
 
     # ── SIDEBAR ───────────────────────────────────────────────────────────────
     with st.sidebar:
@@ -673,7 +665,7 @@ def page_advanced():
         st.markdown("---")
         with st.form("adv_form"):
             st.header("2. FAST Settings")
-            st.info(f"Engine: {binfo['backend']}")
+            st.caption("Powered by ssqueezepy — validated wavelet synchrosqueezing")
             c1, c2 = st.columns(2)
             f1 = c1.number_input("Min freq (Hz)", value=8,  min_value=1)
             f2 = c2.number_input("Max freq (Hz)", value=100, min_value=2)
@@ -703,8 +695,8 @@ def page_advanced():
 
                 ph = st.empty()
                 ph.text(f"WSST for {col}…")
-                Tx_orig, _, ssq, _ = custom_wsst.ssq_cwt(
-                    sig, fs=samp_rate, voices_per_octave=32)
+                Tx_orig, _, ssq, _ = ssq_cwt(
+                    sig, fs=samp_rate, nv=32, wavelet=('morlet', {'mu': 6}))
                 ph.empty()
 
                 pb = st.progress(0, text=f"{col}: 0/{len(freq_steps)} bands")
@@ -750,8 +742,7 @@ def page_advanced():
                 st.error(f"Error — {col}: {e}")
                 import traceback; st.code(traceback.format_exc())
 
-        st.success(f"✅ {len(freq_steps)} bands · {time.time()-t0:.2f}s"
-                   f"  ({binfo['backend']})")
+        st.success(f"✅ {len(freq_steps)} bands · {time.time()-t0:.2f}s")
         st.pyplot(fig, use_container_width=True)
 
         dl1, dl2 = st.columns(2)

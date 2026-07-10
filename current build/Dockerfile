@@ -50,7 +50,6 @@ RUN pip install --no-cache-dir --no-index --find-links=/wheels \
 # Copy application code
 COPY app.py .
 
-
 # Expose the port Streamlit runs on
 EXPOSE 8501
 
