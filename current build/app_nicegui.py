@@ -66,18 +66,25 @@ def _process_single_band(f1, x, fs, voices_per_octave=32, order=4):
     return Tx
 
 
-def _fast_aggregate(x, fs, freq_steps, voices_per_octave=32):
-    """Average filtered WSST transforms. Returns (W_agg, n_valid)."""
-    W_agg, n_valid = None, 0
-    for f in freq_steps:
-        Tx = _process_single_band(f, x, fs, voices_per_octave)
-        if Tx is not None:
-            if W_agg is None:
-                W_agg = np.zeros_like(Tx, dtype=complex)
-            W_agg += Tx
-            n_valid += 1
-    if W_agg is not None and n_valid > 1:
-        W_agg /= n_valid
+def _fast_aggregate_parallel(x, fs, freq_steps, voices_per_octave=32, max_workers=4):
+    """Parallel version: process bands concurrently via thread pool."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    results = {}
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {pool.submit(_process_single_band, f, x, fs, voices_per_octave): f
+                   for f in freq_steps}
+        for future in as_completed(futures):
+            f = futures[future]
+            try:
+                Tx = future.result()
+                if Tx is not None:
+                    results[f] = Tx
+            except Exception:
+                pass
+    if not results:
+        return None
+    W_agg = sum(results.values())
+    W_agg /= len(results)
     return W_agg
 
 
@@ -86,7 +93,7 @@ def _run_fast(sig, fs, f_min, f_max, df_step=1.0, voices_per_octave=32):
     freq_steps = np.arange(f_min, f_max, df_step)
     Tx_orig, _, ssq_freqs, _ = ssq_cwt(
         sig, fs=fs, nv=voices_per_octave, wavelet=('morlet', {'mu': 6}))
-    W_agg = _fast_aggregate(sig, fs, freq_steps, voices_per_octave)
+    W_agg = _fast_aggregate_parallel(sig, fs, freq_steps, voices_per_octave)
     mean_power = np.mean(np.abs(Tx_orig) ** 2)
     mask = (np.abs(Tx_orig) ** 2 > 0.9 * mean_power).astype(float)
     if W_agg is None:
@@ -282,7 +289,8 @@ html, body { font-family: 'DM Sans', sans-serif; }
 def main_page():
     ui.add_head_html(GLOBAL_CSS)
 
-    app = dict(data_df=None, fs=1000, muscle_cols=[], results={}, crop=(0, 30))
+    app = dict(data_df=None, fs=1000, muscle_cols=[], results={},
+               crop=(0, 30), selected_muscles=[])
 
     # ── HEADER ──
     ui.html("""
@@ -292,15 +300,15 @@ def main_page():
                     text-transform:uppercase">Muscle Fatigue Check</div>
     </div>""", sanitize=False)
 
-    # ── DYNAMIC SECTIONS ──
-    upload_zone = ui.column().classes('w-full')
-    after_upload = ui.column().classes('w-full')
-    results_zone = ui.column().classes('w-full')
+    # ── ZONES ──
+    upload_card = ui.card().classes('w-full')
+    controls_card = ui.card().classes('w-full')
+    results_card = ui.card().classes('w-full')
 
     # ── UPLOAD ──
     async def on_upload(e):
-        upload_zone.clear()
-        with upload_zone:
+        upload_card.clear()
+        with upload_card:
             ui.spinner(size='lg')
             ui.label('Reading your file…')
 
@@ -313,27 +321,28 @@ def main_page():
         try:
             df, det_fs = _load_file(wrapper)
         except Exception as ex:
-            upload_zone.clear()
-            with upload_zone:
+            upload_card.clear()
+            with upload_card:
                 ui.label(f'Error: {ex}').classes('text-red-500')
             return
 
         if df is None or df.empty:
-            upload_zone.clear()
-            with upload_zone:
+            upload_card.clear()
+            with upload_card:
                 ui.label('No numeric data found').classes('text-red-500')
             return
 
         app['data_df'] = df
         app['fs'] = int(det_fs) if det_fs else 1000
         app['muscle_cols'] = _muscle_columns(df)
+        app['selected_muscles'] = list(app['muscle_cols'])
         app['results'] = {}
         app['crop'] = (0.0, min(30.0, len(df) / app['fs']))
 
-        _build_controls(app, upload_zone, after_upload, results_zone)
+        _build_controls(app, upload_card, controls_card, results_card)
 
-    upload_zone.clear()
-    with upload_zone:
+    upload_card.clear()
+    with upload_card:
         ui.upload(
             label='Drop your sEMG recording here',
             on_upload=on_upload,
@@ -341,43 +350,69 @@ def main_page():
         ).classes('w-full').props('accept=.csv,.txt,.mat')
 
 
-def _build_controls(app, upload_zone, after_upload, results_zone):
+def _build_controls(app, upload_card, controls_card, results_card):
     cols = app['muscle_cols']
     fs = app['fs']
     ref_len = len(app['data_df'][cols[0]].values)
     total_dur = ref_len / fs
     crop = app['crop']
 
-    upload_zone.clear()
-    with upload_zone:
-        ui.label(f'Loaded {len(cols)} muscles · {fs} Hz · {total_dur:.0f}s')
-        ui.label(', '.join(cols[:4]) + (f' +{len(cols)-4}' if len(cols) > 4 else ''))
+    upload_card.clear()
+    results_card.clear()
 
-    # ── TIME WINDOW ──
-    after_upload.clear()
-    results_zone.clear()
+    # ── FILE SUMMARY ──
+    with upload_card:
+        ui.label(f'{len(cols)} muscles detected').classes('text-sm font-medium')
+        ui.label(f'{fs} Hz · {total_dur:.0f}s recording · '
+                 f'{", ".join(cols[:3])}{" …" if len(cols) > 3 else ""}')\
+            .classes('text-xs text-gray-500')
 
-    with after_upload:
-        ui.label('Select time window:').classes('font-medium mt-2')
+    # ── CONTROLS ──
+    controls_card.clear()
+    with controls_card:
+        # Muscle selection
+        ui.label('Muscles to analyse:').classes('text-sm font-medium')
+        sel = {c: ui.checkbox(c, value=True) for c in cols}
+        with ui.row().classes('flex-wrap gap-2'):
+            for c, cb in sel.items():
+                cb.classes('text-xs')
+
+        # Time window
+        ui.separator()
+        ui.label('Time window:').classes('text-sm font-medium mt-2')
         slider = ui.range(
             min=0, max=total_dur,
             value={'min': crop[0], 'max': crop[1]},
             step=0.5
         ).classes('w-full')
+        window_label = ui.label().classes('text-xs text-gray-500')
 
-        status = ui.label().classes('text-sm text-gray-500')
-
-        def _update_status():
+        def _update_window():
             v = slider.value
             app['crop'] = (v['min'], v['max'])
-            status.set_text(f'{v["min"]:.0f}s – {v["max"]:.0f}s  ({v["max"] - v["min"]:.0f}s)')
+            window_label.set_text(f'{v["min"]:.0f}s – {v["max"]:.0f}s  '
+                                  f'({v["max"] - v["min"]:.0f}s window)')
+        slider.on('change', _update_window)
+        _update_window()
 
-        slider.on('change', _update_status)
-        _update_status()
+        # Threshold info
+        ui.separator()
+        ui.html("""
+        <div style="font-size:0.75rem;color:#64748b;line-height:1.6">
+            <strong>Fatigue thresholds:</strong><br>
+            🟢 MIF ≥ 18 Hz = Not fatigued<br>
+            🟡 MIF ≥ 12 Hz = Some fatigue<br>
+            🔴 MIF &lt; 12 Hz = Fatigued
+        </div>""", sanitize=False)
 
-        # ── BIG RUN BUTTON ──
+        # Run button
         async def _on_run():
-            results_zone.clear()
+            chosen = [c for c, cb in sel.items() if cb.value]
+            if not chosen:
+                ui.notify('Select at least one muscle', type='warning')
+                return
+            app['selected_muscles'] = chosen
+
             s0 = max(int(app['crop'][0] * fs), 0)
             s1 = min(int(app['crop'][1] * fs), ref_len)
             if s0 >= s1:
@@ -386,15 +421,17 @@ def _build_controls(app, upload_zone, after_upload, results_zone):
             app['s1'] = s1
             app['crop_used'] = app['crop']
 
-            # Show progress area
-            with results_zone:
+            controls_card.clear()
+            results_card.clear()
+
+            with results_card:
                 progress = ui.linear_progress(0).classes('w-full')
                 msg = ui.label('Starting…').classes('text-sm text-gray-600')
 
             results = {}
-            n = len(cols)
+            n = len(chosen)
 
-            for i, col in enumerate(cols):
+            for i, col in enumerate(chosen):
                 sig = app['data_df'][col].values[s0:s1].astype(float)
                 if np.isnan(sig).any() or np.isinf(sig).any():
                     results[col] = dict(Tx=None, ssq=None, mif=np.nan, status='grey',
@@ -403,8 +440,8 @@ def _build_controls(app, upload_zone, after_upload, results_zone):
                     results[col] = dict(Tx=None, ssq=None, mif=np.nan, status='grey',
                                         detail='Flat', label=col)
                 else:
-                    msg.set_text(f'Analysing {col} ({i+1}/{n})…')
-                    await asyncio.sleep(0)  # flush UI
+                    msg.set_text(f'{col} ({i+1}/{n}) — processing 35 bands…')
+                    await asyncio.sleep(0)
                     try:
                         Tx_fast, _, ssq_freqs = await run.cpu_bound(
                             _run_fast, sig, fs, 1.0, 35.0, 1.0, 32)
@@ -412,23 +449,24 @@ def _build_controls(app, upload_zone, after_upload, results_zone):
                         results[col] = dict(Tx=Tx_fast, ssq=ssq_freqs, mif=mif,
                                             status=st, detail=detail, label=col)
                     except Exception as e:
-                        results[col] = dict(Tx=None, ssq=None, mif=np.nan, status='grey',
-                                            detail=str(e)[:60], label=col)
+                        results[col] = dict(Tx=None, ssq=None, mif=np.nan,
+                                            status='grey', detail=str(e)[:60], label=col)
                 progress.set_value((i + 1) / n)
-                await asyncio.sleep(0)  # flush UI
+                await asyncio.sleep(0)
 
             app['results'] = results
-            results_zone.clear()
-            _show_results(app, results_zone)
+            results_card.clear()
+            _show_results(app, results_card)
+            _build_controls(app, upload_card, controls_card, results_card)
 
-        ui.button('Check My Muscles', on_click=_on_run)\
-            .props('color=primary size=xl').classes('w-full mt-4')
+        ui.button(f'Analyse Muscles', on_click=_on_run)\
+            .props('color=primary size=lg').classes('w-full mt-4')
 
 
 def _show_results(app, container):
     results = app['results']
     with container:
-        ui.markdown('## Results')
+        ui.markdown('### Results')
         html = '<div class="fatigue-grid">'
         for col, r in results.items():
             html += _traffic_light_html(r['label'], r['status'], r['detail'])
@@ -436,20 +474,17 @@ def _show_results(app, container):
         ui.html(html, sanitize=False)
 
         ui.html("""
-        <div class="legend" style="display:flex;gap:1.5rem;flex-wrap:wrap;margin-top:0.5rem;
-                    font-size:0.8rem;color:#64748b">
-            <span>🟢 Green = No fatigue</span>
-            <span>🟡 Amber = Some fatigue</span>
-            <span>🔴 Red   = Fatigued</span>
-            <span>⚫ Grey  = No data</span>
+        <div style="display:flex;gap:1.2rem;flex-wrap:wrap;margin-top:0.3rem;
+                    font-size:0.75rem;color:#64748b">
+            <span>🟢 ≥ 18 Hz = Not fatigued</span>
+            <span>🟡 ≥ 12 Hz = Some fatigue</span>
+            <span>🔴 &lt; 12 Hz = Fatigued</span>
         </div>""", sanitize=False)
 
-        # Spectrograms
         with ui.expansion('View spectrograms', value=False):
             t_axis = np.arange(app['s1'] - app['s0']) / app['fs'] + app['crop_used'][0]
             for col, r in results.items():
                 if r['Tx'] is None:
-                    ui.label(f'{r["label"]}: skipped').classes('text-xs text-gray-400')
                     continue
                 band = (r['ssq'] >= 1.0) & (r['ssq'] <= 35.0)
                 fp = r['ssq'][band]
@@ -464,7 +499,6 @@ def _show_results(app, container):
                 plt.tight_layout()
                 ui.pyplot(fig, close_figure=True)
 
-        # Download CSV
         rows = [{'Muscle': r['label'],
                  'MIF (Hz)': f"{r['mif']:.2f}" if not np.isnan(r['mif']) else 'N/A',
                  'Status': r['status'].capitalize()}
