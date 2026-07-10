@@ -82,7 +82,19 @@ def _fast_aggregate(x, fs, freq_steps, voices_per_octave=32):
 
 
 def _run_fast(sig, fs, f_min, f_max, df_step=1.0, voices_per_octave=32):
-    """FAST pipeline -> (Tx_fast, Tx_orig, ssq_freqs)."""
+    """FAST pipeline -> (Tx_fast, Tx_orig, ssq_freqs).
+
+    Decimates to 200 Hz before processing — the fatigue band is 1-35 Hz,
+    so Nyquist at 100 Hz is >2.5x headroom.  No information loss.
+    """
+    from scipy.signal import decimate
+
+    target_fs = 200.0
+    if fs > target_fs:
+        q = int(fs / target_fs)
+        sig = decimate(sig, q, ftype='iir')
+        fs = target_fs
+
     freq_steps = np.arange(f_min, f_max, df_step)
     Tx_orig, _, ssq_freqs, _ = ssq_cwt(
         sig, fs=fs, nv=voices_per_octave, wavelet=('morlet', {'mu': 6}))
