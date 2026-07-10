@@ -490,7 +490,7 @@ def _show_results(app, container):
                 ax.set_ylim(1, 35)
                 ax.set_title(r['label'], fontsize=10, fontweight='bold')
                 plt.tight_layout()
-                ui.pyplot(fig, close_figure=True)
+                ui.pyplot(fig, close=True)
 
         rows = [{'Muscle': r['label'],
                  'MIF (Hz)': f"{r['mif']:.2f}" if not np.isnan(r['mif']) else 'N/A',
@@ -498,8 +498,7 @@ def _show_results(app, container):
                 for r in results.values()]
         buf = io.StringIO()
         pd.DataFrame(rows).to_csv(buf, index=False)
-        ui.download(buf.getvalue().encode(), 'fatigue_report.csv', 'text/csv')\
-            .props('label="Download Report (CSV)" flat')
+        ui.download(buf.getvalue().encode(), 'fatigue_report.csv', 'text/csv')
 
 
 # ═══════════════════════════════════════════════════════════════════════
