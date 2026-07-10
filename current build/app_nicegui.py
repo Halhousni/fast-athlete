@@ -331,7 +331,6 @@ def _build_controls(app, upload_card, controls_card, results_card):
     crop = app['crop']
 
     upload_card.clear()
-    results_card.clear()
 
     # ── FILE SUMMARY ──
     with upload_card:
