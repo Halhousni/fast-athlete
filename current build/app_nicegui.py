@@ -66,25 +66,18 @@ def _process_single_band(f1, x, fs, voices_per_octave=32, order=4):
     return Tx
 
 
-def _fast_aggregate_parallel(x, fs, freq_steps, voices_per_octave=32, max_workers=4):
-    """Parallel version: process bands concurrently via thread pool."""
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-    results = {}
-    with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = {pool.submit(_process_single_band, f, x, fs, voices_per_octave): f
-                   for f in freq_steps}
-        for future in as_completed(futures):
-            f = futures[future]
-            try:
-                Tx = future.result()
-                if Tx is not None:
-                    results[f] = Tx
-            except Exception:
-                pass
-    if not results:
-        return None
-    W_agg = sum(results.values())
-    W_agg /= len(results)
+def _fast_aggregate(x, fs, freq_steps, voices_per_octave=32):
+    """Average filtered WSST transforms sequentially."""
+    W_agg, n_valid = None, 0
+    for f in freq_steps:
+        Tx = _process_single_band(f, x, fs, voices_per_octave)
+        if Tx is not None:
+            if W_agg is None:
+                W_agg = np.zeros_like(Tx, dtype=complex)
+            W_agg += Tx
+            n_valid += 1
+    if W_agg is not None and n_valid > 1:
+        W_agg /= n_valid
     return W_agg
 
 
@@ -93,7 +86,7 @@ def _run_fast(sig, fs, f_min, f_max, df_step=1.0, voices_per_octave=32):
     freq_steps = np.arange(f_min, f_max, df_step)
     Tx_orig, _, ssq_freqs, _ = ssq_cwt(
         sig, fs=fs, nv=voices_per_octave, wavelet=('morlet', {'mu': 6}))
-    W_agg = _fast_aggregate_parallel(sig, fs, freq_steps, voices_per_octave)
+    W_agg = _fast_aggregate(sig, fs, freq_steps, voices_per_octave)
     mean_power = np.mean(np.abs(Tx_orig) ** 2)
     mask = (np.abs(Tx_orig) ** 2 > 0.9 * mean_power).astype(float)
     if W_agg is None:
