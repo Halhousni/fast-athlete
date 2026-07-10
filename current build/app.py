@@ -327,87 +327,43 @@ def traffic_light_html(label, status, detail):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# PAGE: SPLASH
+# MAIN PAGE  (athlete-focused — single flow)
 # ──────────────────────────────────────────────────────────────────────────────
 
-def page_splash():
-    st.markdown(GLOBAL_CSS, unsafe_allow_html=True)
-    st.markdown("""
-    <div class="splash-wrap">
-        <div class="splash-logo">FA<span>ST</span></div>
-        <div class="splash-sub">Filter &amp; Aggregate Synchrosqueezed Transform</div>
-        <div class="splash-divider"></div>
-        <p style="color:#475569;max-width:440px;margin-bottom:2.5rem;
-                  font-size:0.93rem;line-height:1.75">
-            High-resolution time–frequency analysis for muscle activity signals.<br>
-            Based on Chakrabarty <em>et al.</em> (2021).
-        </p>
-    </div>""", unsafe_allow_html=True)
-
-    _, col_b, col_a, _ = st.columns([1, 1.3, 1.3, 1])
-
-    with col_b:
-        st.markdown("""
-        <div class="mode-card">
-            <div class="mode-card-icon">🟢</div>
-            <div class="mode-card-title">Basic</div>
-            <div class="mode-card-desc">
-                Upload sEMG data and get an instant muscle fatigue
-                report — no signal-processing knowledge required.
-            </div>
-        </div>""", unsafe_allow_html=True)
-        if st.button("Open Basic Mode", key="btn_basic",
-                     use_container_width=True, type="primary"):
-            st.session_state.page = 'basic'
-            st.rerun()
-
-    with col_a:
-        st.markdown("""
-        <div class="mode-card">
-            <div class="mode-card-icon">🔬</div>
-            <div class="mode-card-title">Advanced</div>
-            <div class="mode-card-desc">
-                Full control over frequency bands, filter order,
-                and WSST parameters for expert analysis.
-            </div>
-        </div>""", unsafe_allow_html=True)
-        if st.button("Open Advanced Mode", key="btn_adv",
-                     use_container_width=True):
-            st.session_state.page = 'advanced'
-            st.rerun()
-
-    st.markdown(f"<p style='text-align:center;color:#94a3b8;font-size:0.78rem;"
-                f"margin-top:1.2rem'>Ready</p>", unsafe_allow_html=True)
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# PAGE: BASIC
-# ──────────────────────────────────────────────────────────────────────────────
-
-def page_basic():
+def page_main():
     st.markdown(GLOBAL_CSS, unsafe_allow_html=True)
 
+    # ── HEADER ────────────────────────────────────────────────────────────────
     st.markdown("""
     <div class="page-header">
-        <div class="page-header-title">FA<span>ST</span> — Fatigue Assessment</div>
+        <div class="page-header-title">FA<span>ST</span></div>
+        <div style="font-size:0.82rem;color:#94a3b8;letter-spacing:0.06em;
+                    text-transform:uppercase">Muscle Fatigue Check</div>
     </div>""", unsafe_allow_html=True)
 
-    if st.button("← Home", key="back_basic"):
-        st.session_state.page = 'splash'
-        st.rerun()
+    # ── UPLOAD ────────────────────────────────────────────────────────────────
+    uf = st.file_uploader(
+        "Drop your sEMG recording here",
+        type=["csv", "txt", "mat"],
+        key="main_uf", label_visibility="collapsed")
 
-    # ── STEP 1: UPLOAD ────────────────────────────────────────────────────────
-    st.markdown("### 1 · Upload sEMG data")
-    st.caption("CSV, TXT, or MAT file. Column headers become muscle names "
-               "automatically.")
-
-    uf = st.file_uploader("Drop file here", type=["csv","txt","mat"],
-                          key="basic_uf", label_visibility="collapsed")
     if not uf:
-        st.info("👆 Upload an sEMG file to begin.")
+        st.markdown("""
+        <div style="text-align:center;padding:3rem 1rem;color:#94a3b8">
+            <div style="font-size:3rem;margin-bottom:1rem">📂</div>
+            <p style="font-size:1.05rem;margin-bottom:0.3rem">
+                Upload a CSV, TXT, or MAT file
+            </p>
+            <p style="font-size:0.82rem">
+                Your muscle names are detected automatically.<br>
+                Nothing else to configure — just drop and check.
+            </p>
+        </div>""", unsafe_allow_html=True)
+        _coach_tools_expander(None, None)
         return
 
-    with st.spinner("Reading file…"):
+    # ── LOAD DATA ─────────────────────────────────────────────────────────────
+    with st.spinner("Reading your file…"):
         try:
             data_df, det_fs = load_file(uf)
         except Exception as e:
@@ -415,148 +371,92 @@ def page_basic():
             return
 
     if data_df is None or data_df.empty:
-        st.error("No numeric data found. Please check the file format.")
+        st.error("No numeric data found. Check the file format.")
         return
 
-    # ── STEP 2: CONFIRM SETTINGS ──────────────────────────────────────────────
-    st.markdown("### 2 · Confirm settings")
-
-    all_cols    = list(data_df.columns)
+    all_cols = list(data_df.columns)
     muscle_cols = muscle_columns(data_df)
+    default_fs = int(det_fs) if det_fs else 1000
 
-    c1, c2 = st.columns(2)
-    with c1:
-        default_fs = int(det_fs) if det_fs else 1000
-        samp_rate  = st.number_input(
-            "Sampling rate (Hz)", min_value=50, max_value=10000,
-            value=default_fs, step=1,
-            help="Auto-detected where possible — please verify.")
-        if det_fs:
-            st.caption(f"✓ Auto-detected from file: {det_fs:.0f} Hz")
+    # ── QUICK SUMMARY ─────────────────────────────────────────────────────────
+    ref_len = len(data_df[muscle_cols[0]].values) if muscle_cols else len(data_df)
+    total_dur = ref_len / default_fs
 
-    with c2:
-        sel_muscles = st.multiselect(
-            "Muscles to analyse", options=all_cols,
-            default=(muscle_cols or all_cols)[:6],
-            help="Time/Marker columns are filtered out automatically.")
+    c_s1, c_s2, c_s3, c_s4 = st.columns(4)
+    c_s1.metric("Muscles found", len(muscle_cols))
+    c_s2.metric("Sampling rate", f"{default_fs} Hz")
+    c_s3.metric("Duration", f"{total_dur:.1f} s")
+    c_s4.metric("Channels", ", ".join(muscle_cols[:3]) +
+                (f" +{len(muscle_cols)-3}" if len(muscle_cols) > 3 else ""))
 
-    if not sel_muscles:
-        st.warning("Select at least one muscle channel.")
-        return
-
-    with st.expander("✏️  Rename muscles (optional)"):
-        muscle_labels = {}
-        cols_ui = st.columns(min(len(sel_muscles), 3))
-        for i, col in enumerate(sel_muscles):
-            with cols_ui[i % len(cols_ui)]:
-                muscle_labels[col] = st.text_input(
-                    f"Label for '{col}'", value=col, key=f"lbl_{col}")
-
-    ref_len  = len(data_df[sel_muscles[0]].values)
-    total_dur = ref_len / samp_rate
-    with st.expander("⏱  Select time window (optional)", expanded=False):
-        crop = st.slider("Time range (s)", 0.0, float(total_dur),
-                         (0.0, min(float(total_dur), 30.0)),
-                         key="basic_crop")
-    s0 = max(int(crop[0] * samp_rate), 0)
-    s1 = min(int(crop[1] * samp_rate), ref_len)
+    # ── TIME WINDOW ───────────────────────────────────────────────────────────
+    st.markdown("#### Which part of the recording?")
+    crop = st.slider(
+        "Time range", 0.0, float(total_dur),
+        (0.0, min(float(total_dur), 30.0)),
+        key="main_crop",
+        help="Choose the section to analyse. Default is the first 30 seconds.")
+    s0 = max(int(crop[0] * default_fs), 0)
+    s1 = min(int(crop[1] * default_fs), ref_len)
     if s0 >= s1:
         s0, s1 = 0, min(5000, ref_len)
+    window_dur = (s1 - s0) / default_fs
 
-    # ── STEP 3: DECISION CRITERIA ─────────────────────────────────────────────
-    st.markdown("### 3 · Fatigue classification criteria")
-    st.markdown("""
-    <div class="decision-box">
-        <div class="decision-box-title">
-            🔬 Spectral thresholds
-            <span class="pending-badge">Pending — Prof Samit</span>
-        </div>
-        <p style="font-size:0.86rem;color:#475569;margin:0 0 0.4rem">
-            These thresholds map the FAST spectral output to a traffic-light
-            fatigue status. The values below are <strong>provisional
-            placeholders</strong>. Update them here once clinical criteria
-            are confirmed by Prof Samit Chakrabarty (University of Leeds).
-        </p>
-    </div>""", unsafe_allow_html=True)
+    st.caption(f"Analysing {crop[0]:.0f}s – {crop[1]:.0f}s  "
+               f"({window_dur:.1f}s of data)")
 
-    dc1, dc2, dc3 = st.columns(3)
-    with dc1:
-        metric_info = st.selectbox(
-            "Spectral metric",
-            ["Mean instantaneous frequency (MIF)"],
-            help="FAST-derived spectral measure used for classification. "
-                 "Additional options can be added once criteria are confirmed.")
-    with dc2:
-        green_thresh = st.number_input(
-            "🟢 Green threshold (Hz)", min_value=1.0, max_value=35.0,
-            value=18.0, step=0.5,
-            help="MIF at or above this value → Not fatigued")
-    with dc3:
-        amber_thresh = st.number_input(
-            "🟡 Amber threshold (Hz)", min_value=1.0, max_value=35.0,
-            value=12.0, step=0.5,
-            help="MIF between amber and green → Some fatigue. "
-                 "Below amber → Fatigued.")
-
-    if amber_thresh >= green_thresh:
-        st.warning("⚠️ Amber threshold must be lower than the Green threshold.")
+    # ── RUN ───────────────────────────────────────────────────────────────────
+    if not st.button("🏃 Check My Muscles", type="primary",
+                     use_container_width=True, key="main_run"):
+        _coach_tools_expander(data_df, default_fs)
         return
 
-    st.caption("Analysis band is fixed to 1–35 Hz (sEMG fatigue range).")
+    results = {}
+    overall = st.progress(0, text="Starting analysis…")
 
-    # ── STEP 4: RUN ───────────────────────────────────────────────────────────
-    st.markdown("### 4 · Run analysis")
-    if not st.button("▶  Analyse muscles", type="primary",
-                     use_container_width=True, key="basic_run"):
-        return
-
-    results = {}   # col → dict
-    overall = st.progress(0, text="Starting…")
-
-    for m_idx, col in enumerate(sel_muscles):
-        label = muscle_labels.get(col, col)
-        sig   = data_df[col].values[s0:s1].astype(float)
+    for m_idx, col in enumerate(muscle_cols):
+        sig = data_df[col].values[s0:s1].astype(float)
 
         if np.isnan(sig).any() or np.isinf(sig).any():
             results[col] = dict(Tx=None, ssq=None, mif=np.nan,
                                 status='grey', detail='NaN/Inf in data',
-                                label=label)
+                                label=col)
             continue
         if np.std(sig) < 1e-10:
             results[col] = dict(Tx=None, ssq=None, mif=np.nan,
                                 status='grey', detail='Flat signal',
-                                label=label)
+                                label=col)
             continue
 
-        bprog = st.progress(0, text=f"Processing {label}…")
+        bprog = st.progress(0, text=f"Processing {col}…")
 
-        def _cb(frac, txt, _bp=bprog, _lb=label):
+        def _cb(frac, txt, _bp=bprog, _lb=col):
             _bp.progress(frac, text=f"{_lb}: {txt}")
 
         try:
             Tx_fast, _, ssq_freqs = run_fast(
-                sig, samp_rate, f_min=1.0, f_max=35.0, df_step=1.0,
+                sig, default_fs, f_min=1.0, f_max=35.0, df_step=1.0,
                 progress_callback=_cb)
 
             mif, status, detail = classify_fatigue(
-                Tx_fast, ssq_freqs, green_thresh, amber_thresh)
+                Tx_fast, ssq_freqs, 18.0, 12.0)
 
             results[col] = dict(Tx=Tx_fast, ssq=ssq_freqs,
                                 mif=mif, status=status,
-                                detail=detail, label=label)
+                                detail=detail, label=col)
         except Exception as e:
             results[col] = dict(Tx=None, ssq=None, mif=np.nan,
                                 status='grey', detail=str(e)[:60],
-                                label=label)
+                                label=col)
         bprog.empty()
-        overall.progress((m_idx + 1) / len(sel_muscles),
-                         text=f"Completed: {label}")
+        overall.progress((m_idx + 1) / len(muscle_cols),
+                         text=f"Completed: {col}")
 
     overall.empty()
 
-    # ── RESULTS: TRAFFIC LIGHTS ───────────────────────────────────────────────
+    # ── RESULTS ───────────────────────────────────────────────────────────────
     st.markdown("---")
-    st.markdown("## Results")
+    st.markdown("## Your Muscle Status")
 
     html = '<div class="fatigue-grid">'
     for col, r in results.items():
@@ -564,17 +464,27 @@ def page_basic():
     html += '</div>'
     st.markdown(html, unsafe_allow_html=True)
 
-    t_axis = np.arange(s1 - s0) / samp_rate + crop[0]
+    # Legend
+    st.markdown("""
+    <div style="display:flex;gap:1.5rem;flex-wrap:wrap;margin-top:0.5rem;
+                font-size:0.8rem;color:#64748b">
+        <span>🟢 Green = No fatigue detected</span>
+        <span>🟡 Amber = Some fatigue</span>
+        <span>🔴 Red   = Fatigued</span>
+        <span>⚫ Grey  = Could not analyse</span>
+    </div>""", unsafe_allow_html=True)
 
-    with st.expander("📊 View FAST spectrograms"):
+    # Spectrograms
+    t_axis = np.arange(s1 - s0) / default_fs + crop[0]
+    with st.expander("📊 See detailed spectrograms"):
         for col, r in results.items():
             if r['Tx'] is None:
                 st.caption(f"{r['label']}: skipped — {r['detail']}")
                 continue
             band = (r['ssq'] >= 1.0) & (r['ssq'] <= 35.0)
-            fp   = r['ssq'][band]
-            e    = np.abs(r['Tx'][band, :]) ** 2
-            e   /= (e.max() + 1e-12)
+            fp = r['ssq'][band]
+            e = np.abs(r['Tx'][band, :]) ** 2
+            e /= (e.max() + 1e-12)
             fig, ax = plt.subplots(figsize=(10, 2.6))
             ax.pcolormesh(t_axis, fp, e,
                           norm=mcolors.PowerNorm(gamma=0.3),
@@ -588,7 +498,7 @@ def page_basic():
             st.pyplot(fig, use_container_width=True)
             plt.close(fig)
 
-    # Summary CSV download
+    # Download
     rows = [{'Muscle': r['label'],
              'MIF (Hz)': f"{r['mif']:.2f}" if not np.isnan(r['mif']) else 'N/A',
              'Status': r['status'].capitalize(),
@@ -596,91 +506,82 @@ def page_basic():
             for r in results.values()]
     buf = io.StringIO()
     pd.DataFrame(rows).to_csv(buf, index=False)
-    st.download_button("⬇  Download summary CSV",
+    st.download_button("⬇ Download Report (CSV)",
                        buf.getvalue().encode(),
-                       "fatigue_summary.csv", "text/csv")
+                       "fatigue_report.csv", "text/csv")
+
+    # ── COACH TOOLS ───────────────────────────────────────────────────────────
+    _coach_tools_expander(data_df, default_fs)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# PAGE: ADVANCED
+# COACH TOOLS  (collapsed expander — researcher / clinician access)
 # ──────────────────────────────────────────────────────────────────────────────
 
-def page_advanced():
-    st.markdown(GLOBAL_CSS, unsafe_allow_html=True)
-
-    st.markdown("""
-    <div class="page-header">
-        <div class="page-header-title">FA<span>ST</span> — Advanced Analysis</div>
-    </div>""", unsafe_allow_html=True)
-
-    if st.button("← Home", key="back_adv"):
-        st.session_state.page = 'splash'
-        st.rerun()
-
-    # ── SIDEBAR ───────────────────────────────────────────────────────────────
-    with st.sidebar:
-        st.header("1. Data")
-        src = st.radio("Source", ["Synthetic", "Upload File"], key="adv_src")
-        data_df, samp_rate = None, 1000
-
-        if src == "Synthetic":
-            dur       = st.slider("Duration (s)", 1, 5, 2)
-            samp_rate = st.number_input("Sampling rate (Hz)",
-                                        value=1000, min_value=100)
-            t_s = np.linspace(0, dur, int(dur * samp_rate))
-            sig = (0.5 * np.sin(2*np.pi*20*t_s) +
-                   0.8 * np.sin(2*np.pi*25*t_s) +
-                   0.6 * np.sin(2*np.pi*60*t_s))
-            data_df = pd.DataFrame({"Synthetic (20,25,60 Hz)": sig})
-        else:
-            uf = st.file_uploader("Upload", type=["mat","csv","txt"],
-                                  key="adv_uf")
-            samp_rate = st.number_input("Sampling rate (Hz)",
-                                        value=1000, min_value=100)
-            if uf:
-                try:
-                    data_df, det_fs = load_file(uf)
-                    if det_fs:
-                        st.caption(f"✓ Auto-detected fs: {det_fs:.0f} Hz")
-                except Exception as e:
-                    st.error(f"Load error: {e}")
-
-        final_signals, t = {}, np.array([])
-        if data_df is not None:
-            all_cols = list(data_df.columns)
-            sel = st.multiselect("Channels", all_cols,
-                                 default=(muscle_columns(data_df) or
-                                          all_cols)[:1])
-            if sel:
-                ref  = data_df[sel[0]].values
-                tdur = len(ref) / samp_rate
-                cr   = st.slider("Time range (s)", 0.0, float(tdur),
-                                 (0.0, min(float(tdur), 5.0)))
-                s0   = max(int(cr[0]*samp_rate), 0)
-                s1   = min(int(cr[1]*samp_rate), len(ref))
-                if s0 >= s1: s0, s1 = 0, min(1000, len(ref))
-                t    = np.arange(s1-s0)/samp_rate + cr[0]
-                final_signals = {c: data_df[c].values[s0:s1] for c in sel}
+def _coach_tools_expander(data_df, samp_rate):
+    with st.expander("🔬 Coach Tools — Advanced Analysis", expanded=False):
+        st.caption(
+            "For coaches, clinicians, and researchers. "
+            "Tune FAST parameters, test with synthetic signals, "
+            "and compare WSST vs FAST spectrograms.")
 
         st.markdown("---")
-        with st.form("adv_form"):
-            st.header("2. FAST Settings")
-            st.caption("Powered by ssqueezepy — validated wavelet synchrosqueezing")
-            c1, c2 = st.columns(2)
-            f1 = c1.number_input("Min freq (Hz)", value=8,  min_value=1)
-            f2 = c2.number_input("Max freq (Hz)", value=100, min_value=2)
-            dfs = st.number_input("Step (Hz)", value=1.0, min_value=0.5,
-                                  step=0.5)
-            st.caption("Filter: f−1 to f+2 Hz  (MATLAB V4 match)")
-            go = st.form_submit_button("🚀 Run FAST", type="primary")
+        src = st.radio("Signal source", ["Use uploaded data", "Synthetic test"],
+                       key="ct_src", horizontal=True)
 
-    # ── ANALYSIS ──────────────────────────────────────────────────────────────
-    if go and final_signals:
-        freq_steps = np.arange(f1, f2, dfs)
-        n_plots    = len(final_signals) * 2
+        if src == "Synthetic test":
+            dur = st.slider("Duration (s)", 1, 5, 2, key="ct_dur")
+            sr = st.number_input("Sampling rate (Hz)", value=1000,
+                                 min_value=100, key="ct_fs")
+            t_s = np.linspace(0, dur, int(dur * sr))
+            sig = (0.5 * np.sin(2 * np.pi * 20 * t_s) +
+                   0.8 * np.sin(2 * np.pi * 25 * t_s) +
+                   0.6 * np.sin(2 * np.pi * 60 * t_s))
+            final_signals = {"Synthetic": sig}
+            t_arr = t_s
+            sr_used = sr
+        else:
+            if data_df is None:
+                st.info("Upload a file above first.")
+                return
+            cols = muscle_columns(data_df)
+            sel = st.multiselect("Channel", cols,
+                                 default=cols[:1] if cols else [],
+                                 key="ct_chan")
+            if not sel:
+                return
+            ref = data_df[sel[0]].values
+            tdur = len(ref) / samp_rate
+            cr = st.slider("Time range (s)", 0.0, float(tdur),
+                           (0.0, min(float(tdur), 5.0)), key="ct_crop")
+            s0 = max(int(cr[0] * samp_rate), 0)
+            s1 = min(int(cr[1] * samp_rate), len(ref))
+            if s0 >= s1:
+                s0, s1 = 0, min(1000, len(ref))
+            t_arr = np.arange(s1 - s0) / samp_rate + cr[0]
+            final_signals = {c: data_df[c].values[s0:s1] for c in sel}
+            sr_used = samp_rate
+
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            f_min = st.number_input("Min freq (Hz)", value=8, min_value=1,
+                                    key="ct_fmin")
+        with c2:
+            f_max = st.number_input("Max freq (Hz)", value=100, min_value=2,
+                                    key="ct_fmax")
+        with c3:
+            df_step = st.number_input("Step (Hz)", value=1.0, min_value=0.5,
+                                      step=0.5, key="ct_step")
+        st.caption("Filter band: f−1 to f+2 Hz  ·  Powered by ssqueezepy")
+
+        if not st.button("🚀 Run Advanced Analysis", key="ct_run"):
+            return
+
+        freq_steps = np.arange(f_min, f_max, df_step)
+        n_plots = len(final_signals) * 2
         plt.rcParams.update({"font.family": "sans-serif",
                              "savefig.bbox": "tight"})
-        fig, axes = plt.subplots(n_plots, 1, figsize=(12, 5*n_plots),
+        fig, axes = plt.subplots(n_plots, 1, figsize=(12, 5 * n_plots),
                                  sharex=True, constrained_layout=True)
         if n_plots == 1:
             axes = [axes]
@@ -689,86 +590,91 @@ def page_advanced():
         for idx, (col, sig) in enumerate(final_signals.items()):
             try:
                 if np.isnan(sig).any() or np.isinf(sig).any():
-                    st.warning(f"Skipping '{col}': NaN/Inf"); continue
+                    st.warning(f"Skipping '{col}': NaN/Inf")
+                    continue
                 if np.std(sig) < 1e-10:
-                    st.warning(f"Skipping '{col}': flatline"); continue
+                    st.warning(f"Skipping '{col}': flatline")
+                    continue
 
                 ph = st.empty()
                 ph.text(f"WSST for {col}…")
                 Tx_orig, _, ssq, _ = ssq_cwt(
-                    sig, fs=samp_rate, nv=32, wavelet=('morlet', {'mu': 6}))
+                    sig, fs=sr_used, nv=32,
+                    wavelet=('morlet', {'mu': 6}))
                 ph.empty()
 
                 pb = st.progress(0, text=f"{col}: 0/{len(freq_steps)} bands")
 
-                def _cb(frac, txt, _pb=pb, _c=col):
+                def _cb_adv(frac, txt, _pb=pb, _c=col):
                     _pb.progress(frac, text=f"{_c}: {txt}")
 
                 W_agg = fast_sequential_aggregate(
-                    sig, samp_rate, freq_steps,
-                    voices_per_octave=32, progress_callback=_cb)
+                    sig, sr_used, freq_steps,
+                    voices_per_octave=32, progress_callback=_cb_adv)
                 pb.empty()
 
-                mp    = np.mean(np.abs(Tx_orig)**2)
-                mask  = (np.abs(Tx_orig)**2 > 0.9*mp).astype(float)
-                Tx_f  = (W_agg if W_agg is not None
-                         else np.zeros_like(Tx_orig, complex)) * mask
-                mf    = (ssq >= f1) & (ssq <= f2)
-                fp    = ssq[mf]
+                mp = np.mean(np.abs(Tx_orig) ** 2)
+                mask = (np.abs(Tx_orig) ** 2 > 0.9 * mp).astype(float)
+                Tx_f = (W_agg if W_agg is not None
+                        else np.zeros_like(Tx_orig, dtype=complex)) * mask
+                mf = (ssq >= f_min) & (ssq <= f_max)
+                fp = ssq[mf]
 
-                ax0   = axes[idx*2]
-                e0    = np.abs(Tx_orig[mf,:])**2
-                e0   /= e0.max() + 1e-12
-                ax0.pcolormesh(t, fp, e0, norm=mcolors.PowerNorm(0.3),
+                ax0 = axes[idx * 2]
+                e0 = np.abs(Tx_orig[mf, :]) ** 2
+                e0 /= e0.max() + 1e-12
+                ax0.pcolormesh(t_arr, fp, e0,
+                               norm=mcolors.PowerNorm(0.3),
                                cmap=parula_cmap, shading='auto')
                 ax0.set_ylabel('Frequency (Hz)', fontsize=11)
                 ax0.set_title(f"Standard WSST: {col}", fontsize=12,
                               fontweight='bold')
-                ax0.set_ylim(f1, f2)
+                ax0.set_ylim(f_min, f_max)
 
-                ax1   = axes[idx*2+1]
-                e1    = np.abs(Tx_f[mf,:])**2
-                e1   /= e1.max() + 1e-12
-                ax1.pcolormesh(t, fp, e1, norm=mcolors.PowerNorm(0.3),
+                ax1 = axes[idx * 2 + 1]
+                e1 = np.abs(Tx_f[mf, :]) ** 2
+                e1 /= e1.max() + 1e-12
+                ax1.pcolormesh(t_arr, fp, e1,
+                               norm=mcolors.PowerNorm(0.3),
                                cmap=parula_cmap, shading='auto')
                 ax1.set_ylabel('Frequency (Hz)', fontsize=11)
                 ax1.set_title(f"FAST Result: {col}", fontsize=12,
                               fontweight='bold')
-                ax1.set_ylim(f1, f2)
-                if idx*2+1 == n_plots-1:
+                ax1.set_ylim(f_min, f_max)
+                if idx * 2 + 1 == n_plots - 1:
                     ax1.set_xlabel('Time (s)', fontsize=11)
 
             except Exception as e:
                 st.error(f"Error — {col}: {e}")
-                import traceback; st.code(traceback.format_exc())
+                import traceback
+                st.code(traceback.format_exc())
 
-        st.success(f"✅ {len(freq_steps)} bands · {time.time()-t0:.2f}s")
+        st.success(f"{len(freq_steps)} bands · {time.time() - t0:.2f}s")
         st.pyplot(fig, use_container_width=True)
 
         dl1, dl2 = st.columns(2)
         with dl1:
-            b = io.BytesIO(); fig.savefig(b, format="pdf", dpi=300); b.seek(0)
-            st.download_button("📄 PDF", b, "FAST.pdf", "application/pdf")
+            b = io.BytesIO()
+            fig.savefig(b, format="pdf", dpi=300)
+            b.seek(0)
+            st.download_button("📄 PDF", b, "FAST_advanced.pdf",
+                               "application/pdf")
         with dl2:
-            b = io.BytesIO(); fig.savefig(b, format="png", dpi=300); b.seek(0)
-            st.download_button("🖼️ PNG", b, "FAST.png", "image/png")
+            b = io.BytesIO()
+            fig.savefig(b, format="png", dpi=300)
+            b.seek(0)
+            st.download_button("🖼️ PNG", b, "FAST_advanced.png",
+                               "image/png")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# ROUTER
+# APP ENTRY
 # ──────────────────────────────────────────────────────────────────────────────
 
 if __name__ == '__main__':
     st.set_page_config(
-        page_title="FAST — Muscle Fatigue Analysis",
-        page_icon="🔬",
+        page_title="FAST — Muscle Fatigue Check",
+        page_icon="💪",
         layout="wide"
     )
-    if 'page' not in st.session_state:
-        st.session_state.page = 'splash'
-
-    {
-        'splash':   page_splash,
-        'basic':    page_basic,
-        'advanced': page_advanced,
-    }.get(st.session_state.page, page_splash)()
+    page_main()
