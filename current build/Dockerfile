@@ -48,11 +48,11 @@ RUN pip install --no-cache-dir --no-index --find-links=/wheels \
     && rm -rf /wheels
 
 # Copy application code
-COPY app_nicegui.py .
+COPY app.py .
 COPY bowen_centroid.py .
 COPY .streamlit/ .streamlit/
 
-# Expose the port Streamlit runs on
+# Expose the port
 EXPOSE 8501
 
 # Verify the GPU runtime is functional at build time (optional, won't see GPU
@@ -60,7 +60,7 @@ EXPOSE 8501
 RUN gpuinfo --list 2>/dev/null || echo "No GPU during build (expected)"
 
 # Command to run the app
-CMD ["python3", "app_nicegui.py"]
+CMD ["python3", "app.py"]
 
 # ============================================================
 # HOW TO BUILD AND RUN

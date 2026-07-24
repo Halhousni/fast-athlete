@@ -1,4 +1,6 @@
-nicegui
+fastapi
+uvicorn
+python-multipart
 numpy
 scipy
 ssqueezepy
