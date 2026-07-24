@@ -1,4 +1,5 @@
-nicegui
+streamlit
+matplotlib
 numpy
 scipy
 ssqueezepy

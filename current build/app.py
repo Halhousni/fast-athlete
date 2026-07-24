@@ -13,6 +13,8 @@ from scipy.signal import butter, filtfilt
 
 from ssqueezepy import ssq_cwt
 
+from bowen_centroid import run_bowen_pipeline
+
 # ──────────────────────────────────────────────────────────────────────────────
 # GLOBAL STYLE
 # ──────────────────────────────────────────────────────────────────────────────
@@ -441,13 +443,16 @@ def page_main():
             mif, status, detail = classify_fatigue(
                 Tx_fast, ssq_freqs, 18.0, 12.0)
 
+            bowen = run_bowen_pipeline(Tx_fast, ssq_freqs, col, n_pad=0)
+
             results[col] = dict(Tx=Tx_fast, ssq=ssq_freqs,
                                 mif=mif, status=status,
-                                detail=detail, label=col)
+                                detail=detail, label=col,
+                                bowen=bowen)
         except Exception as e:
             results[col] = dict(Tx=None, ssq=None, mif=np.nan,
                                 status='grey', detail=str(e)[:60],
-                                label=col)
+                                label=col, bowen=None)
         bprog.empty()
         overall.progress((m_idx + 1) / len(muscle_cols),
                          text=f"Completed: {col}")
@@ -474,6 +479,33 @@ def page_main():
         <span>⚫ Grey  = Could not analyse</span>
     </div>""", unsafe_allow_html=True)
 
+    # Bowen LOW Centroid
+    st.markdown("---")
+    st.markdown("## Bowen LOW Centroid (8–23 Hz) ⚠️ UNTHRESHOLDED")
+    cols_b = st.columns(min(len(results), 4))
+    for i, (col, r) in enumerate(results.items()):
+        bowen = r.get('bowen')
+        with cols_b[i % len(cols_b)]:
+            if bowen is not None and not np.isnan(bowen.phase_mean_centroid):
+                delta_str = None
+                if not (np.isnan(bowen.early_centroid) or np.isnan(bowen.late_centroid)):
+                    delta_str = f"Early→Late: {bowen.late_centroid - bowen.early_centroid:+.1f} Hz"
+                st.metric(
+                    label=f"{col}",
+                    value=f"{bowen.phase_mean_centroid:.1f} Hz",
+                    delta=delta_str,
+                )
+                st.caption(f"Valid: {bowen.n_valid}/{bowen.n_total} pts  ·  "
+                          f"LOW frac: {np.nanmedian(bowen.low_fraction):.1%}")
+            else:
+                st.metric(label=f"{col}", value="N/A")
+                st.caption("No valid centroid")
+    st.caption(
+        "⚠️ Bowen's spec does not define fatigue thresholds for the centroid. "
+        "The value reports frequency position within 8–23 Hz. "
+        "No fatigue direction is assigned."
+    )
+
     # Spectrograms
     t_axis = np.arange(s1 - s0) / default_fs + crop[0]
     with st.expander("📊 See detailed spectrograms"):
@@ -499,11 +531,21 @@ def page_main():
             plt.close(fig)
 
     # Download
-    rows = [{'Muscle': r['label'],
-             'MIF (Hz)': f"{r['mif']:.2f}" if not np.isnan(r['mif']) else 'N/A',
-             'Status': r['status'].capitalize(),
-             'Detail': r['detail']}
-            for r in results.values()]
+    rows = []
+    for r in results.values():
+        row = {'Muscle': r['label'],
+               'MIF (Hz)': f"{r['mif']:.2f}" if not np.isnan(r['mif']) else 'N/A',
+               'Status': r['status'].capitalize()}
+        bowen = r.get('bowen')
+        if bowen is not None:
+            row['Centroid_8_23_Hz'] = (f"{bowen.phase_mean_centroid:.2f}"
+                                       if not np.isnan(bowen.phase_mean_centroid) else 'N/A')
+            row['Centroid_Early'] = (f"{bowen.early_centroid:.2f}"
+                                     if not np.isnan(bowen.early_centroid) else 'N/A')
+            row['Centroid_Late'] = (f"{bowen.late_centroid:.2f}"
+                                    if not np.isnan(bowen.late_centroid) else 'N/A')
+            row['Valid_Points'] = f"{bowen.n_valid}/{bowen.n_total}"
+        rows.append(row)
     buf = io.StringIO()
     pd.DataFrame(rows).to_csv(buf, index=False)
     st.download_button("⬇ Download Report (CSV)",
