@@ -216,6 +216,10 @@ async def analyze(data: dict):
                 continue
             sig = np.array(st['data'][col], dtype=float)
             fs = st['fs']
+            # Cap to 30 seconds
+            max_samples = int(30 * fs)
+            if len(sig) > max_samples:
+                sig = sig[:max_samples]
             if np.isnan(sig).any() or np.isinf(sig).any() or np.std(sig) < 1e-10:
                 results[mid] = dict(status='grey', score=0, tip='Bad or flat data')
                 continue
