@@ -15,7 +15,7 @@ from scipy.signal import butter, filtfilt
 from ssqueezepy import ssq_cwt
 
 from nicegui import ui, run
-from bowen_centroid import run_bowen_pipeline, BowenResult
+from bowen_centroid import run_bowen_pipeline
 
 # ═══════════════════════════════════════════════════════════════════════
 # FAST ENGINE  (unchanged from Streamlit version)
@@ -140,12 +140,11 @@ def _muscle_columns(data_df):
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# FATIGUE CLASSIFICATION  (dual: old MIF + Bowen LOW centroid)
+# FATIGUE CLASSIFICATION
 # ═══════════════════════════════════════════════════════════════════════
 
-def _classify_fatigue_mif(Tx_fast, ssq_freqs, green_thresh=18.0, amber_thresh=12.0,
-                          f_min=1.0, f_max=35.0):
-    """Original MIF-based classification (1–35 Hz).  Kept for comparison."""
+def _classify_fatigue(Tx_fast, ssq_freqs, green_thresh=18.0, amber_thresh=12.0,
+                     f_min=1.0, f_max=35.0):
     band = (ssq_freqs >= f_min) & (ssq_freqs <= f_max)
     freqs_b = ssq_freqs[band]
     power_b = np.abs(Tx_fast[band, :]) ** 2
@@ -161,17 +160,6 @@ def _classify_fatigue_mif(Tx_fast, ssq_freqs, green_thresh=18.0, amber_thresh=12
         return mif, 'amber', f'MIF = {mif:.1f} Hz'
     else:
         return mif, 'red', f'MIF = {mif:.1f} Hz'
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# GAP — Bowen's spec does NOT define fatigue thresholds on the centroid.
-# The centroid is a position-in-band measure (Hz).  A lower value means
-# energy shifted toward the 8 Hz end; higher means toward 23 Hz.
-# §1 explicitly: "No universal fatigue direction is assigned: a lower
-# centroid does not automatically mean greater fatigue."
-#
-# For now we report the centroid numerically and flag it as ⚠️ UNTHRESHOLDED.
-# ═══════════════════════════════════════════════════════════════════════
 
 
 def _traffic_light_html(label, status, detail):
@@ -195,72 +183,19 @@ def _traffic_light_html(label, status, detail):
     </div>"""
 
 
-def _centroid_card_html(label, bowen_result):
-    """Bowen LOW centroid card — reports the phase-mean centroid in Hz."""
-    if bowen_result is None:
-        return f"""
-    <div class="muscle-card" style="border-color:#e2e8f0">
-        <div class="muscle-name" title="{label}">{label}</div>
-        <div style="color:#94a3b8;font-size:0.75rem;margin-top:0.5rem">
-            No centroid data
-        </div>
-    </div>"""
-
-    c = bowen_result.phase_mean_centroid
-    early = bowen_result.early_centroid
-    late = bowen_result.late_centroid
-    n_v = bowen_result.n_valid
-    n_t = bowen_result.n_total
-
-    if np.isnan(c):
-        cent_str = 'N/A'
-        shift_str = ''
-    else:
-        cent_str = f'{c:.1f} Hz'
-        # GAP: no fatigue thresholds — just show early→late shift direction
-        if not np.isnan(early) and not np.isnan(late):
-            delta = late - early
-            if delta < -1:
-                shift_str = f'Early→Late: {delta:+.1f} Hz (shift toward lower end)'
-            elif delta > 1:
-                shift_str = f'Early→Late: {delta:+.1f} Hz (shift toward upper end)'
-            else:
-                shift_str = f'Early→Late: {delta:+.1f} Hz (stable)'
-        else:
-            shift_str = ''
-        shift_str = f'<div class="metric-val">{shift_str}</div>' if shift_str else ''
-
-    return f"""
-    <div class="muscle-card" style="border-color:#2563eb33;border-width:2px">
-        <div class="muscle-name" title="{label}">{label}</div>
-        <div style="font-family:'DM Serif Display',serif;font-size:1.6rem;
-                    color:#2563eb;margin:0.4rem 0">{cent_str}</div>
-        <div style="font-size:0.67rem;color:#94a3b8">
-            Bowen LOW 8–23 Hz centroid
-        </div>
-        {shift_str}
-        <div class="metric-val" style="margin-top:0.15rem">
-            Valid: {n_v}/{n_t} time points
-        </div>
-    </div>"""
-
-
 # ═══════════════════════════════════════════════════════════════════════
 # CPU-BOUND WORKER  (module-level — required by NiceGUI run.cpu_bound)
 # ═══════════════════════════════════════════════════════════════════════
 
 def _compute_one_muscle(sig_bytes, fs, label):
-    """Compute FAST + Bowen LOW centroid for one muscle. Pickleable for run.cpu_bound."""
+    """Compute FAST for one muscle. Pickleable for run.cpu_bound."""
     sig = np.frombuffer(sig_bytes, dtype=np.float64)
     try:
         Tx_fast, _, ssq_freqs = _run_fast(sig, fs, 1.0, 35.0, 1.0)
-        # Old MIF (for comparison)
-        mif, status, detail = _classify_fatigue_mif(Tx_fast, ssq_freqs)
-        # Bowen LOW centroid (§2–6)
-        bowen = run_bowen_pipeline(Tx_fast, ssq_freqs, label, n_pad=0)
-        return label, Tx_fast, ssq_freqs, mif, status, detail, bowen
+        mif, status, detail = _classify_fatigue(Tx_fast, ssq_freqs)
+        return label, Tx_fast, ssq_freqs, mif, status, detail
     except Exception as e:
-        return label, None, None, np.nan, 'grey', str(e)[:60], None
+        return label, None, None, np.nan, 'grey', str(e)[:60]
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -437,9 +372,10 @@ def _build_controls(app, upload_card, controls_card, results_card):
         ui.separator()
         ui.html("""
         <div style="font-size:0.75rem;color:#64748b;line-height:1.6">
-            <strong>Analysis methods:</strong><br>
-            \U0001f7e2 MIF (1–35 Hz): ≥18 green, ≥12 amber, &lt;12 red<br>
-            \U0001f535 Bowen LOW centroid (8–23 Hz): reported in Hz (no thresholds)
+            <strong>Fatigue thresholds:</strong><br>
+            🟢 MIF ≥ 18 Hz = Not fatigued<br>
+            🟡 MIF ≥ 12 Hz = Some fatigue<br>
+            🔴 MIF &lt; 12 Hz = Fatigued
         </div>""", sanitize=False)
 
         # Run button
@@ -472,17 +408,17 @@ def _build_controls(app, upload_card, controls_card, results_card):
                 sig = app['data_df'][col].values[s0:s1].astype(float)
                 if np.isnan(sig).any() or np.isinf(sig).any():
                     results[col] = dict(Tx=None, ssq=None, mif=np.nan, status='grey',
-                                        detail='Bad data', label=col, bowen=None)
+                                        detail='Bad data', label=col)
                 elif np.std(sig) < 1e-10:
                     results[col] = dict(Tx=None, ssq=None, mif=np.nan, status='grey',
-                                        detail='Flat', label=col, bowen=None)
+                                        detail='Flat', label=col)
                 else:
                     msg.set_text(f'{col} ({i+1}/{n}) — processing 35 bands…')
                     await asyncio.sleep(0)
                     try:
                         Tx_fast, _, ssq_freqs = await run.cpu_bound(
                             _run_fast, sig, fs, 1.0, 35.0, 1.0, 32)
-                        mif, st, detail = _classify_fatigue_mif(Tx_fast, ssq_freqs)
+                        mif, st, detail = _classify_fatigue(Tx_fast, ssq_freqs)
                         bowen = run_bowen_pipeline(Tx_fast, ssq_freqs, col, n_pad=0)
                         results[col] = dict(Tx=Tx_fast, ssq=ssq_freqs, mif=mif,
                                             status=st, detail=detail, label=col,
@@ -506,8 +442,7 @@ def _build_controls(app, upload_card, controls_card, results_card):
 def _show_results(app, container):
     results = app['results']
     with container:
-        # ── Section 1: Traffic lights (old MIF) ──
-        ui.markdown('### MIF Classification  (1\u201335 Hz)')
+        ui.markdown('### Results')
         html = '<div class="fatigue-grid">'
         for col, r in results.items():
             html += _traffic_light_html(r['label'], r['status'], r['detail'])
@@ -517,43 +452,48 @@ def _show_results(app, container):
         ui.html("""
         <div style="display:flex;gap:1.2rem;flex-wrap:wrap;margin-top:0.3rem;
                     font-size:0.75rem;color:#64748b">
-            <span>\U0001f7e2 \u2265 18 Hz = Not fatigued</span>
-            <span>\U0001f7e1 \u2265 12 Hz = Some fatigue</span>
-            <span>\U0001f534 &lt; 12 Hz = Fatigued</span>
+            <span>🟢 ≥ 18 Hz = Not fatigued</span>
+            <span>🟡 ≥ 12 Hz = Some fatigue</span>
+            <span>🔴 &lt; 12 Hz = Fatigued</span>
         </div>""", sanitize=False)
 
-        # ── Section 2: Bowen LOW centroid ──
-        ui.markdown('### Bowen LOW Centroid  (8\u201323 Hz)  \u26a0\ufe0f UNTHRESHOLDED')
-        html2 = '<div class="fatigue-grid">'
+        # Bowen LOW centroid section
+        ui.markdown('### Bowen LOW Centroid (8–23 Hz)')
+        html_b = '<div class="fatigue-grid">'
         for col, r in results.items():
-            html2 += _centroid_card_html(r['label'], r.get('bowen'))
-        html2 += '</div>'
-        ui.html(html2, sanitize=False)
-        ui.html("""
-        <div style="font-size:0.72rem;color:#e67e22;margin-top:0.3rem;
-                    padding:0.5rem 0.8rem;background:#fef9e7;border:1px solid #f9e79f;
-                    border-radius:8px">
-            \u26a0\ufe0f Bowen's spec explicitly states no fatigue thresholds exist for
-            the centroid. The value reports frequency position within 8\u201323 Hz.
-            A lower value means energy concentrated toward 8 Hz; higher toward 23 Hz.
-            <strong>No fatigue direction is assigned.</strong>
-        </div>""", sanitize=False)
+            b = r.get('bowen')
+            if b is not None and not np.isnan(b.phase_mean_centroid):
+                delta = ''
+                if not (np.isnan(b.early_centroid) or np.isnan(b.late_centroid)):
+                    d = b.late_centroid - b.early_centroid
+                    delta = f'Early→Late: {d:+.1f} Hz'
+                html_b += f'''<div class="muscle-card" style="border-color:#2563eb55">
+                    <div class="muscle-name">{b.label}</div>
+                    <div style="font-size:1.4rem;color:#2563eb;margin:0.3rem 0">{b.phase_mean_centroid:.1f} Hz</div>
+                    <div class="metric-val">{delta}</div>
+                    <div class="metric-val">Valid: {b.n_valid}/{b.n_total}</div>
+                </div>'''
+            else:
+                html_b += f'''<div class="muscle-card">
+                    <div class="muscle-name">{col}</div>
+                    <div class="metric-val">N/A</div>
+                </div>'''
+        html_b += '</div>'
+        ui.html(html_b, sanitize=False)
+        ui.html('<div style="font-size:0.72rem;color:#e67e22;margin-top:0.3rem">⚠️ No fatigue thresholds exist for the centroid. Reports frequency position within 8–23 Hz.</div>',
+                sanitize=False)
 
-        # ── CSV export ──
         rows = []
         for r in results.values():
             row = {'Muscle': r['label'],
                    'MIF (Hz)': f"{r['mif']:.2f}" if not np.isnan(r['mif']) else 'N/A',
-                   'MIF_Status': r['status'].capitalize()}
-            bowen = r.get('bowen')
-            if bowen is not None:
-                row['Centroid_8_23_Hz'] = (f"{bowen.phase_mean_centroid:.2f}"
-                                           if not np.isnan(bowen.phase_mean_centroid) else 'N/A')
-                row['Centroid_Early'] = (f"{bowen.early_centroid:.2f}"
-                                         if not np.isnan(bowen.early_centroid) else 'N/A')
-                row['Centroid_Late'] = (f"{bowen.late_centroid:.2f}"
-                                        if not np.isnan(bowen.late_centroid) else 'N/A')
-                row['Valid_Points'] = f"{bowen.n_valid}/{bowen.n_total}"
+                   'Status': r['status'].capitalize()}
+            b = r.get('bowen')
+            if b is not None:
+                row['Centroid_8_23_Hz'] = f"{b.phase_mean_centroid:.2f}" if not np.isnan(b.phase_mean_centroid) else 'N/A'
+                row['Centroid_Early'] = f"{b.early_centroid:.2f}" if not np.isnan(b.early_centroid) else 'N/A'
+                row['Centroid_Late'] = f"{b.late_centroid:.2f}" if not np.isnan(b.late_centroid) else 'N/A'
+                row['Valid_Points'] = f"{b.n_valid}/{b.n_total}"
             rows.append(row)
         buf = io.StringIO()
         pd.DataFrame(rows).to_csv(buf, index=False)
