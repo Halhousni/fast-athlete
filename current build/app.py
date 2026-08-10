@@ -4,7 +4,7 @@ Material Design 3 frontend + FastAPI backend.
 Filter & Aggregate Synchrosqueezed Transform.
 """
 from __future__ import annotations
-import asyncio, io, time, re, itertools, base64, json, tempfile, pickle, os
+import asyncio, io, time, re, itertools, base64, json, tempfile, pickle, os, sqlite3, hashlib, datetime
 import numpy as np
 import scipy.io
 import pandas as pd
@@ -162,6 +162,131 @@ def _load_session(sid):
         session_store[sid] = data
         return data
     return None
+
+# ═══════════════════════════════════════════════════
+# PROFILES + SAVED RESULTS (SQLite)
+# ═══════════════════════════════════════════════════
+
+DATA_DIR = os.environ.get('FAST_DATA_DIR', '/data')
+os.makedirs(DATA_DIR, exist_ok=True)
+DB_PATH = os.path.join(DATA_DIR, 'fast.db')
+
+def _db():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    conn.execute('PRAGMA foreign_keys = ON')
+    return conn
+
+def _init_db():
+    conn = _db()
+    conn.executescript('''
+    CREATE TABLE IF NOT EXISTS profiles(
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL UNIQUE,
+      pin_hash TEXT,
+      created_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS results(
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      profile_id INTEGER NOT NULL REFERENCES profiles(id),
+      ts TEXT NOT NULL,
+      avg_score REAL,
+      status TEXT,
+      detail TEXT
+    );
+    ''')
+    conn.commit()
+    conn.close()
+
+_init_db()
+
+def _hash_pin(pin):
+    return hashlib.sha256(('fast|' + pin).encode()).hexdigest()
+
+@app.get('/api/profiles')
+async def list_profiles():
+    conn = _db()
+    rows = conn.execute(
+        'SELECT id, name, pin_hash IS NOT NULL AS has_pin FROM profiles ORDER BY name'
+    ).fetchall()
+    conn.close()
+    return {'profiles': [dict(r) for r in rows]}
+
+@app.post('/api/profiles')
+async def create_profile(data: dict):
+    name = (data.get('name') or '').strip()
+    if not name:
+        return JSONResponse({'error': 'Name is required'}, status_code=400)
+    pin = (data.get('pin') or '').strip()
+    if pin and (not pin.isdigit() or len(pin) != 4):
+        return JSONResponse({'error': 'PIN must be 4 digits'}, status_code=400)
+    conn = _db()
+    try:
+        cur = conn.execute(
+            'INSERT INTO profiles(name, pin_hash, created_at) VALUES(?,?,?)',
+            (name, _hash_pin(pin) if pin else None,
+             datetime.datetime.now().isoformat(timespec='seconds')))
+        conn.commit()
+        pid = cur.lastrowid
+    except sqlite3.IntegrityError:
+        conn.close()
+        return JSONResponse({'error': 'That name is already taken'}, status_code=409)
+    conn.close()
+    return {'id': pid, 'name': name}
+
+@app.post('/api/profiles/verify')
+async def verify_profile(data: dict):
+    pid = data.get('id')
+    pin = (data.get('pin') or '').strip()
+    conn = _db()
+    row = conn.execute('SELECT name, pin_hash FROM profiles WHERE id=?', (pid,)).fetchone()
+    conn.close()
+    if not row:
+        return JSONResponse({'error': 'Profile not found'}, status_code=404)
+    if row['pin_hash'] and row['pin_hash'] != _hash_pin(pin):
+        return JSONResponse({'error': 'Wrong PIN'}, status_code=403)
+    return {'id': pid, 'name': row['name']}
+
+@app.post('/api/save')
+async def save_result(data: dict):
+    pid = data.get('profile_id')
+    if not pid:
+        return JSONResponse({'error': 'No profile'}, status_code=400)
+    detail = json.dumps({
+        'filename': data.get('filename', ''),
+        'results': data.get('results', []),
+    })
+    conn = _db()
+    try:
+        cur = conn.execute(
+            'INSERT INTO results(profile_id, ts, avg_score, status, detail) VALUES(?,?,?,?,?)',
+            (pid, datetime.datetime.now().isoformat(timespec='seconds'),
+             data.get('avg_score'), data.get('status', ''), detail))
+        conn.commit()
+        rid = cur.lastrowid
+    except sqlite3.IntegrityError:
+        conn.close()
+        return JSONResponse({'error': 'Profile no longer exists'}, status_code=404)
+    conn.close()
+    return {'id': rid}
+
+@app.get('/api/history')
+async def history(profile_id: int):
+    conn = _db()
+    rows = conn.execute(
+        'SELECT id, ts, avg_score, status, detail FROM results '
+        'WHERE profile_id=? ORDER BY ts DESC LIMIT 50', (profile_id,)).fetchall()
+    conn.close()
+    out = []
+    for r in rows:
+        d = json.loads(r['detail'] or '{}')
+        out.append({
+            'id': r['id'], 'ts': r['ts'],
+            'filename': d.get('filename', ''),
+            'avg_score': r['avg_score'], 'status': r['status'],
+            'results': d.get('results', []),
+        })
+    return {'history': out}
 
 @app.get('/', response_class=HTMLResponse)
 async def index():
@@ -482,6 +607,43 @@ input[type=file]{display:none}
   #results-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 20px}
   .result-card>div:nth-child(2){min-width:0}
 }
+
+/* ═══ Profiles ═══ */
+.profile-chip{display:flex;align-items:center;gap:8px;background:var(--card);border:1px solid var(--border);border-radius:999px;padding:4px 12px 4px 4px;cursor:pointer;transition:border-color .15s;font-family:Inter,sans-serif}
+.profile-chip:hover{border-color:var(--cyan)}
+.profile-avatar{width:26px;height:26px;border-radius:50%;background:linear-gradient(135deg,#00E5FF,#00B8D4);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;color:#0a0a0f;flex-shrink:0}
+.profile-name{font-size:12px;font-weight:600;color:var(--text);max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+.sheet-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.6);backdrop-filter:blur(4px);z-index:200;display:flex;align-items:flex-end;justify-content:center}
+.sheet-overlay.hidden{display:none}
+.sheet{width:100%;max-width:480px;background:var(--card);border:1px solid var(--border);border-radius:20px 20px 0 0;padding:20px 20px 28px;max-height:70vh;overflow-y:auto;animation:fadeIn .25s ease}
+.sheet-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+.sheet-title{font-size:12px;font-weight:700;color:var(--text-dim);letter-spacing:.08em}
+.sheet-close{background:none;border:none;color:var(--text-dim);font-size:16px;cursor:pointer;padding:4px}
+.profile-row{display:flex;align-items:center;gap:12px;padding:12px;background:var(--surface);border:1px solid var(--border);border-radius:12px;margin-bottom:8px;cursor:pointer;transition:all .15s}
+.profile-row:hover{border-color:var(--cyan)}
+.profile-row-name{font-size:14px;font-weight:600;color:var(--text);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.profile-active{font-size:9px;font-weight:800;color:var(--cyan);letter-spacing:.08em}
+.sheet-divider{height:1px;background:var(--border);margin:16px 0}
+.sheet-input{width:100%;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 14px;color:var(--text);font-family:Inter,sans-serif;font-size:14px;outline:none;margin-bottom:8px}
+.sheet-input:focus{border-color:var(--cyan)}
+.sheet-pin-row{display:flex;gap:8px;align-items:center}
+.sheet-pin-row .sheet-input{margin-bottom:0}
+.sheet-hint{font-size:11px;color:var(--text-faint);margin-top:8px;line-height:1.5}
+
+/* Toast */
+.toast{position:fixed;bottom:96px;left:50%;transform:translateX(-50%) translateY(20px);background:var(--card);border:1px solid rgba(0,229,255,0.3);color:var(--text);font-size:13px;font-weight:600;padding:12px 20px;border-radius:12px;opacity:0;pointer-events:none;transition:all .3s;z-index:300;max-width:90vw;text-align:center;box-shadow:0 8px 32px rgba(0,0,0,0.4)}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+
+/* History */
+.hist-head{display:flex;align-items:center;gap:12px;margin-bottom:10px}
+.hist-score{font-size:24px;font-weight:800;letter-spacing:-.02em;min-width:56px;text-align:center}
+.hist-date{font-size:12px;color:var(--text-dim)}
+.hist-file{font-size:11px;color:var(--text-faint);margin-top:2px;word-break:break-all}
+.hist-status{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;white-space:nowrap}
+.hist-chips{display:flex;flex-wrap:wrap;gap:6px}
+.hist-chip{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:600;color:var(--text-dim);background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:4px 10px}
+.hist-chip .tl-dot{width:8px;height:8px;box-shadow:none}
 </style>
 </head>
 <body>
@@ -520,10 +682,41 @@ input[type=file]{display:none}
     <div class="logo-text">FAST <span>ATHLETE</span></div>
   </div>
   <div class="header-right">
-    <button class="notif-btn">🔔<span class="notif-badge">3</span></button>
-    <div class="avatar">A</div>
+    <button class="profile-chip" id="profile-chip" onclick="openProfileSheet()">
+      <span class="profile-avatar" id="profile-avatar">G</span>
+      <span class="profile-name" id="profile-name">Guest</span>
+    </button>
   </div>
 </header>
+
+<!-- ═══ PROFILE SHEET ═══ -->
+<div class="sheet-overlay hidden" id="profile-sheet" onclick="if(event.target===this)closeProfileSheet()">
+  <div class="sheet">
+    <div class="sheet-header">
+      <span class="sheet-title">WHO IS CHECKING?</span>
+      <button class="sheet-close" onclick="closeProfileSheet()">✕</button>
+    </div>
+    <div id="profile-list"></div>
+    <div class="hidden" id="pin-box" style="margin-top:4px">
+      <div class="sheet-pin-row" style="margin-bottom:8px">
+        <input class="sheet-input" id="pin-input" placeholder="Enter 4-digit PIN" inputmode="numeric" maxlength="4" autocomplete="off">
+        <button class="btn-primary" style="width:auto;padding:12px 18px;font-size:13px" onclick="confirmPin()">OK</button>
+      </div>
+      <div style="font-size:11px;color:var(--text-faint)">This profile is protected by a PIN.</div>
+    </div>
+    <div class="sheet-divider"></div>
+    <div class="sheet-add">
+      <input class="sheet-input" id="new-profile-name" placeholder="Your name" maxlength="30" autocomplete="off">
+      <div class="sheet-pin-row">
+        <input class="sheet-input" id="new-profile-pin" placeholder="PIN (optional)" inputmode="numeric" maxlength="4" autocomplete="off">
+        <button class="btn-primary" style="width:auto;padding:12px 18px;font-size:13px" onclick="createProfile()">Add</button>
+      </div>
+      <div class="sheet-hint">Profiles keep your results saved on this server. A 4-digit PIN is optional.</div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
 
 <!-- ═══ SCREEN 1: WELCOME / DASHBOARD ═══ -->
 <div class="section active" id="screen-welcome">
@@ -717,6 +910,12 @@ input[type=file]{display:none}
   </div>
 </div>
 
+<!-- ═══ SCREEN 5: HISTORY ═══ -->
+<div class="section" id="screen-history">
+  <div style="font-size:12px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:.06em;margin:16px 0 12px">SAVED ASSESSMENTS</div>
+  <div id="history-list"></div>
+</div>
+
 <!-- ═══ BOTTOM NAV ═══ -->
 <nav class="bottom-nav" id="bottom-nav">
   <button class="nav-item active" data-screen="welcome" onclick="navTo('welcome')">
@@ -727,7 +926,7 @@ input[type=file]{display:none}
     <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
     <span class="nav-label">Assess</span>
   </button>
-  <button class="nav-item" data-screen="results" onclick="navTo('results')">
+  <button class="nav-item" data-screen="history" onclick="navTo('history')">
     <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zM9 17H7v-7h2v7zm4 0h-2V7h2v10zm4 0h-2v-4h2v4z"/></svg>
     <span class="nav-label">History</span>
   </button>
@@ -748,6 +947,9 @@ let sessionData = null;
 let muscles = [];
 let lastResults = null;
 let currentScreen = 'welcome';
+let profile = null;
+let profileList = [];
+let pinTarget = null;
 
 function navTo(screen) {
   document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
@@ -757,6 +959,7 @@ function navTo(screen) {
   const navBtn = document.querySelector('.nav-item[data-screen="' + screen + '"]');
   if (navBtn) navBtn.classList.add('active');
   currentScreen = screen;
+  if (screen === 'history') loadHistory();
 }
 
 function startNewAssessment() {
@@ -975,6 +1178,8 @@ function showResults(selected) {
   const todayBar = document.getElementById('today-bar');
   todayBar.style.height = avgScore + '%';
   todayBar.style.background = gaugeColor;
+
+  saveAssessment(avgScore, overallStatus);
 }
 
 function buildMuscleMap(selected) {
@@ -1005,9 +1210,183 @@ function buildMuscleMap(selected) {
     '<svg viewBox="0 700 724 748" width="200" height="207"><use href="#body-front" class="body-outline" stroke="rgba(255,255,255,0.2)" stroke-width="2"/>' + musclePaths + '</svg>';
 }
 
+// ═══ PROFILES ═══
+try { profile = JSON.parse(localStorage.getItem('fast_profile') || 'null'); } catch(e) { profile = null; }
+
+function openProfileSheet() { loadProfiles(); document.getElementById('profile-sheet').classList.remove('hidden'); }
+function closeProfileSheet() { document.getElementById('profile-sheet').classList.add('hidden'); }
+
+async function loadProfiles() {
+  try {
+    const resp = await fetch('/api/profiles');
+    const data = await resp.json();
+    profileList = data.profiles || [];
+    const list = document.getElementById('profile-list');
+    list.innerHTML = '';
+    profileList.forEach(p => {
+      const isActive = profile && profile.id === p.id;
+      list.innerHTML += '<div class="profile-row"' + (isActive ? ' style="border-color:var(--cyan)"' : '') + ' onclick="onProfileClick(' + p.id + ')">' +
+        '<span class="profile-avatar">' + p.name.charAt(0).toUpperCase() + '</span>' +
+        '<span class="profile-row-name">' + p.name + '</span>' +
+        (p.has_pin ? '<span style="font-size:10px;color:var(--text-faint)">PIN</span>' : '') +
+        (isActive ? '<span class="profile-active">ACTIVE</span>' : '') + '</div>';
+    });
+    if (!profileList.length) {
+      list.innerHTML = '<div style="font-size:13px;color:var(--text-faint);padding:8px 0">No profiles yet — add one below.</div>';
+    }
+  } catch(e) {}
+}
+
+async function selectProfile(id) {
+  const p = profileList.find(x => x.id === id);
+  if (!p) return;
+  profile = {id: p.id, name: p.name};
+  localStorage.setItem('fast_profile', JSON.stringify(profile));
+  updateProfileChip();
+  closeProfileSheet();
+  toast('Profile: ' + p.name);
+}
+
+function onProfileClick(id) {
+  const p = profileList.find(x => x.id === id);
+  if (!p) return;
+  if (p.has_pin) {
+    pinTarget = id;
+    document.getElementById('pin-box').classList.remove('hidden');
+    const input = document.getElementById('pin-input');
+    input.value = '';
+    input.focus();
+    return;
+  }
+  selectProfile(id);
+}
+
+async function confirmPin() {
+  const input = document.getElementById('pin-input');
+  const pin = input.value.trim();
+  if (!pin) { input.focus(); return; }
+  const resp = await fetch('/api/profiles/verify', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({id: pinTarget, pin: pin})
+  });
+  const data = await resp.json();
+  if (data.error) { alert(data.error); input.value = ''; input.focus(); return; }
+  document.getElementById('pin-box').classList.add('hidden');
+  pinTarget = null;
+  profile = {id: data.id, name: data.name};
+  localStorage.setItem('fast_profile', JSON.stringify(profile));
+  updateProfileChip();
+  closeProfileSheet();
+  toast('Profile: ' + data.name);
+}
+
+async function createProfile() {
+  const name = document.getElementById('new-profile-name').value.trim();
+  const pin = document.getElementById('new-profile-pin').value.trim();
+  if (!name) { alert('Enter a name'); return; }
+  const resp = await fetch('/api/profiles', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({name: name, pin: pin || undefined})
+  });
+  const data = await resp.json();
+  if (data.error) { alert(data.error); return; }
+  document.getElementById('new-profile-name').value = '';
+  document.getElementById('new-profile-pin').value = '';
+  profile = {id: data.id, name: data.name};
+  localStorage.setItem('fast_profile', JSON.stringify(profile));
+  updateProfileChip();
+  await loadProfiles();
+  toast('Profile added: ' + data.name);
+}
+
+function updateProfileChip() {
+  document.getElementById('profile-name').textContent = profile ? profile.name : 'Guest';
+  document.getElementById('profile-avatar').textContent = profile ? profile.name.charAt(0).toUpperCase() : 'G';
+}
+
+// ═══ SAVE + HISTORY ═══
+async function saveAssessment(avgScore, overallStatus) {
+  if (!profile) { toast('Add a profile to save results'); return; }
+  if (!lastResults || !lastResults.length) return;
+  const results = lastResults.map(m => ({
+    id: m.id || m.column, name: m.name,
+    status: (m.result || {}).status, score: (m.result || {}).score,
+    centroid: (m.result || {}).centroid
+  }));
+  try {
+    const resp = await fetch('/api/save', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        profile_id: profile.id,
+        filename: sessionData ? sessionData.filename : '',
+        avg_score: avgScore, status: overallStatus, results: results
+      })
+    });
+    const data = await resp.json();
+    if (!data.error) toast('Saved to ' + profile.name);
+  } catch(e) {}
+}
+
+async function loadHistory() {
+  const list = document.getElementById('history-list');
+  if (!profile) {
+    list.innerHTML = '<div class="card" style="text-align:center;color:var(--text-dim);font-size:13px;padding:32px 20px">Pick a profile to see saved assessments.</div>';
+    return;
+  }
+  list.innerHTML = '<div class="progress-step">Loading…</div>';
+  try {
+    const resp = await fetch('/api/history?profile_id=' + profile.id);
+    const data = await resp.json();
+    const h = data.history || [];
+    if (!h.length) {
+      list.innerHTML = '<div class="card" style="text-align:center;color:var(--text-dim);font-size:13px;padding:32px 20px">No saved assessments yet for <b>' + profile.name + '</b>.</div>';
+      return;
+    }
+    list.innerHTML = '';
+    h.forEach(item => {
+      const d = new Date(item.ts);
+      const dateStr = d.toLocaleDateString('en-US', {month: 'short', day: 'numeric'}) + ' · ' + d.toLocaleTimeString('en-US', {hour: 'numeric', minute: '2-digit'});
+      const st = (item.status || '').toUpperCase();
+      let color = 'var(--green)';
+      if (st.indexOf('SOME') >= 0) color = 'var(--amber)';
+      else if (st.indexOf('FATIGUED') >= 0) color = 'var(--red)';
+      let chips = '';
+      (item.results || []).forEach(r => {
+        let c = 'var(--text-dim)';
+        if (r.status === 'green') c = 'var(--green)';
+        else if (r.status === 'amber') c = 'var(--amber)';
+        else if (r.status === 'red') c = 'var(--red)';
+        chips += '<span class="hist-chip"><span class="tl-dot" style="background:' + c + '"></span>' + r.id + '</span>';
+      });
+      list.innerHTML += '<div class="card"><div class="hist-head">' +
+        '<span class="hist-score" style="color:' + color + '">' + (item.avg_score != null ? Math.round(item.avg_score) + '%' : '—') + '</span>' +
+        '<div style="flex:1"><div class="hist-date">' + dateStr + '</div><div class="hist-file">' + (item.filename || '') + '</div></div>' +
+        '<span class="hist-status" style="color:' + color + '">' + st + '</span></div>' +
+        '<div class="hist-chips">' + chips + '</div></div>';
+    });
+  } catch(e) {
+    list.innerHTML = '<div class="card" style="text-align:center;color:var(--text-dim)">Could not load history.</div>';
+  }
+}
+
+// ═══ TOAST ═══
+let toastTimer = null;
+function toast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), 2600);
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('gauge-fill').setAttribute('stroke-dashoffset', '490');
+  updateProfileChip();
 });
+
+document.getElementById('new-profile-name').addEventListener('keydown', e => { if (e.key === 'Enter') createProfile(); });
+document.getElementById('new-profile-pin').addEventListener('keydown', e => { if (e.key === 'Enter') createProfile(); });
+document.getElementById('pin-input').addEventListener('keydown', e => { if (e.key === 'Enter') confirmPin(); });
 </script>
 </body>
 </html>'''
