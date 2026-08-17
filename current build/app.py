@@ -365,25 +365,63 @@ async def analyze(data: dict):
     except Exception as e:
         return dict(error=str(e), results={})
 
+# Full muscle names are checked before abbreviations so e.g. 'VASTUS LATERALIS'
+# matches VL instead of the accidental 'ST' inside it. Abbreviations only match
+# exactly, as a whole token, or anchored to digits ('VL1', '1VL') — never as a
+# bare substring.
+MUSCLE_ALIASES = [
+    ('VL', ['VASTUS LATERALIS', 'VL']),
+    ('VM', ['VASTUS MEDIALIS', 'VM']),
+    ('RF', ['RECTUS FEMORIS', 'RF']),
+    ('BF', ['BICEPS FEMORIS', 'BF']),
+    ('ST', ['SEMITENDINOSUS', 'ST']),
+    ('TA', ['TIBIALIS ANTERIOR', 'TA']),
+    ('GM', ['GASTROCNEMIUS MEDIALIS', 'GASTROCNEMIUS MED', 'GM']),
+    ('GL', ['GASTROCNEMIUS LATERALIS', 'GASTROCNEMIUS LAT', 'GL']),
+]
+
+def _norm_col(s):
+    return re.sub(r'\s+', ' ', str(s).upper().strip()
+                  .replace('_', ' ').replace('-', ' ').replace('.', ' ')
+                  .replace('(', ' ').replace(')', ' ')).strip()
+
 def _match_columns(cols):
     known = {m['id'].upper(): m for m in MUSCLES}
-    matched, used = [], set()
+    # Longest aliases first so full names beat abbreviations
+    alias_order = sorted(((mid, a) for mid, aliases in MUSCLE_ALIASES for a in aliases),
+                         key=lambda x: -len(x[1]))
+    matched, used, matched_cols = [], set(), set()
     for c in cols:
-        cu = c.upper().strip().replace('_', ' ').replace('-', ' ')
-        for mid in known:
-            if cu == mid or mid in cu or any(p == mid for p in cu.split()):
-                if mid not in used:
-                    matched.append(dict(id=mid, name=known[mid]['name'],
-                                       desc=known[mid]['desc'], column=c))
-                    used.add(mid)
-                break
+        cu = _norm_col(c)
+        if not cu:
+            continue
+        hit = None
+        for mid, alias in alias_order:
+            if ' ' in alias:
+                # full-name alias: exact (with or without spaces) or contained
+                if cu == alias or cu.replace(' ', '') == alias.replace(' ', '') or alias in cu:
+                    hit = mid
+                    break
+            else:
+                # abbreviation: exact, whole token, or digit-anchored — never substring
+                if cu == alias or any(t == alias for t in cu.split()) or \
+                   (cu.startswith(alias) and (len(cu) == len(alias) or cu[len(alias)].isdigit())) or \
+                   (cu.endswith(alias) and cu[len(cu) - len(alias) - 1].isdigit()):
+                    hit = mid
+                    break
+        if hit is not None:
+            matched_cols.add(c)
+            if hit not in used:
+                matched.append(dict(id=hit, name=known[hit]['name'],
+                                    desc=known[hit]['desc'], column=c))
+                used.add(hit)
     colours = itertools.cycle(['#6750A4','#625B71','#9A25AE','#386A20',
                                 '#BA1A1A','#AA3300','#00696B','#4A4458'])
     for c in cols:
-        cu = c.upper().strip().replace('_', ' ').replace('-', ' ')
-        if not any(mid in cu or cu == mid for mid in known):
-            matched.append(dict(id=c, name=c, desc='Channel', column=c,
-                               colour=next(colours)))
+        if c in matched_cols:
+            continue
+        matched.append(dict(id=c, name=c, desc='Channel', column=c,
+                            colour=next(colours)))
     return matched
 
 # ═══════════════════════════════════════════════════
