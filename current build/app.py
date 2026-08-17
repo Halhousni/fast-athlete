@@ -86,7 +86,7 @@ def _load_file(content, name):
     return data_df, detected_fs
 
 def _muscle_columns(data_df):
-    excl = re.compile(r'time|marker|trigger|sync|ref|event|frame|sample', re.I)
+    excl = re.compile(r'time|marker|trigger|sync|ref|event|frame|sample|^(uV|mV)(\.\d+)?$', re.I)
     return [c for c in data_df.columns if not excl.search(c)]
 
 def _mif_time_series(Tx_fast, ssq_freqs, f_min=1.0, f_max=35.0):
@@ -137,6 +137,13 @@ MUSCLES = [
     dict(id='TA', name='Tibialis Anterior', desc='Shin'),
     dict(id='GM', name='Gastrocnemius Med.', desc='Inner calf'),
     dict(id='GL', name='Gastrocnemius Lat.', desc='Outer calf'),
+    dict(id='MD', name='Middle Deltoid', desc='Shoulder'),
+    dict(id='BB', name='Biceps Brachii', desc='Front arm'),
+    dict(id='BR', name='Brachioradialis', desc='Outer forearm'),
+    dict(id='FCR', name='Flexor Carpi Radialis', desc='Inner forearm'),
+    dict(id='ECR', name='Extensor Carpi Radialis', desc='Outer forearm'),
+    dict(id='FDI', name='First Dorsal Interosseous', desc='Hand'),
+    dict(id='FDS', name='Flexor Digitorum Superficialis', desc='Forearm'),
 ]
 
 # ═══════════════════════════════════════════════════
@@ -378,12 +385,19 @@ MUSCLE_ALIASES = [
     ('TA', ['TIBIALIS ANTERIOR', 'TA']),
     ('GM', ['GASTROCNEMIUS MEDIALIS', 'GASTROCNEMIUS MED', 'GM']),
     ('GL', ['GASTROCNEMIUS LATERALIS', 'GASTROCNEMIUS LAT', 'GL']),
+    ('MD', ['MIDDLE DELTOID', 'MID DELTOID', 'MID DELT', 'MD']),
+    ('BB', ['BICEPS BRACHII', 'BICEPS BR', 'BB']),
+    ('BR', ['BRACHIORADIALIS', 'BRACHIORAD', 'BR']),
+    ('FCR', ['FLEXOR CARPI RADIALIS', 'FLEX CARP R', 'FCR']),
+    ('ECR', ['EXTENSOR CARPI RADIALIS', 'EXT CARP RAD', 'EXT CARP R', 'ECR']),
+    ('FDI', ['FIRST DORSAL INTEROSSEOUS', 'FDI']),
+    ('FDS', ['FLEXOR DIGITORUM SUPERFICIALIS', 'FDS']),
 ]
 
 def _norm_col(s):
     return re.sub(r'\s+', ' ', str(s).upper().strip()
                   .replace('_', ' ').replace('-', ' ').replace('.', ' ')
-                  .replace('(', ' ').replace(')', ' ')).strip()
+                  .replace('(', ' ').replace(')', ' ').replace(',', ' ')).strip()
 
 def _match_columns(cols):
     known = {m['id'].upper(): m for m in MUSCLES}
@@ -714,6 +728,15 @@ input[type=file]{display:none}
   <path id="calf-right-0" d="M1149.5 1319.51c-6.93-.63-6.82-18.08-7.14-23.7q-.73-12.53-.59-25.09.01-.71.45-.15 2.74 3.49 3.29 7.17c1.67 11.25 3.21 25.34 19.7 19.99 4.87-1.58 7.03-18.57 7.89-23.21.79-4.2 2.74-7 5.28-10.13a.56.56 0 01.98.22c1.12 4.6.04 12.39-.37 17.26-.92 10.77-.32 21.48-1.52 32.37q-.7 6.23-7.01 6.18-12.13-.11-20.96-.91z" fill="currentColor" stroke="none"/>
   <path id="glute-left-0" d="M1070.06 785.19c2.95 1.36 1.8 10.43 1.49 13.04q-3.98 33.27-14.66 64.61a.39.39 0 01-.76-.17c.9-7.05 2.31-14.29 2.16-20.92q-.68-30.14-18.71-54.52-.29-.39.18-.49c7.42-1.52 23.53-4.69 30.3-1.55z" fill="currentColor" stroke="none"/>
   <path id="glute-right-0" d="M1127.24 787.66c-15.99 21.49-22.3 48.51-16.08 74.83a.47.46-63.2 01-.88.29q-1.99-4.69-3.65-10.24-8.29-27.75-11.6-56.54c-.65-5.71-1.1-11.77 6.87-11.9q13-.19 25.68 2.83a.31.24 41.2 01.1.53q-.12.01-.27.07-.1.04-.17.13z" fill="currentColor" stroke="none"/>
+
+  <path id="deltoid-left-0" d="M274.06 311.69q3.94 2.77 4.33 8.14.04.48-.38.73c-9.98 5.88-24.35 7.45-28.82 19.75-2.31 6.36-.97 17.35-1.43 23.68q-.55 7.51-5.73 14.07-10.37 13.11-13.81 16.67c-3.41 3.53-6.81 1.76-10.69-.47-15.42-8.87-24.95-25.45-22.52-43.22 2.05-14.92 12.71-25.79 24.06-35.02 16.99-13.82 35.58-17.99 54.99-4.33z" fill="currentColor" stroke="none"/>
+  <path id="deltoid-right-0" d="M450.39 320.75q-.95-.52-.7-1.58c1.57-6.61 5.8-9.1 12.14-11.9 24.99-11.03 43.76 3.33 60.17 20.74 20.73 21.99 11.81 56.44-14.82 68.19-4.41 1.94-6.79-1.03-9.81-4.51-5.81-6.7-13.46-14.12-15.99-22.8-3.93-13.43 4.32-27.54-9.64-37.62q-8.22-5.93-17.99-9.08-1.84-.59-3.36-1.44z" fill="currentColor" stroke="none"/>
+  <path id="biceps-left-0" d="M189.52 492.51c-2.43.62-7.38.57-7.51-3.08-.56-16.01-.42-35.49 5.11-50.26 3.19-8.54 13.89-30.22 23.27-32.72 10.08-2.68 12.68 16.59 12.6 22.8-.22 15.98-7.51 34.79-15.05 48.71-4.29 7.94-9.95 12.38-18.42 14.55z" fill="currentColor" stroke="none"/>
+  <path id="biceps-right-0" d="M526.69 486.31c-9.9-8.61-17.75-33.21-20.65-47.73-1.41-7.06-1.34-29.61 8.58-32.16 10.33-2.66 23.81 25.34 26.6 32.91q2.6 7.04 3.6 16.13 1.62 14.66 1.66 32.28c.03 11.04-16.45 1.48-19.79-1.43z" fill="currentColor" stroke="none"/>
+  <path id="forearm-left-0" d="M127.23 683.05c-4.07-2.12 1.27-27.07 2.25-31.57 4.98-23.03 9.17-46.17 13.91-69.25q1.53-7.47 2.13-15.13c.93-12.09.81-22.15 6.23-31.59 7.1-12.33 13.54-29.16 26.1-36.73a1.98 1.97 62.7 012.84.91c1.92 4.48 1.93 8.28 2.06 14.15.44 19.77-1.3 41.04-8.72 59.67-11 27.62-22.22 55.21-32.62 82.91-4.04 10.76-7.56 20.66-12.82 26.39q-.59.65-1.36.24z" fill="currentColor" stroke="none"/>
+  <path id="forearm-right-0" d="M600.08 683.04c-5-4.14-8.97-15.46-11.29-21.56-5.82-15.25-11.38-30.55-17.58-45.7q-9.15-22.39-18.02-44.89c-5.58-14.19-7.32-31.42-7.99-46.57-.29-6.44-.68-19.43 2.67-25.02a1.71 1.71 0 012.25-.63c6.72 3.52 11.29 9.96 14.87 16.5q6.25 11.38 12.68 22.66c1.97 3.45 2.93 7.66 3.41 12.06 1.16 10.6 1.55 21.29 3.66 31.65 3.93 19.29 7.38 38.63 11.47 57.92 1.5 7.07 9.3 39.08 5.12 43.5a.91.91 0 01-1.25.08z" fill="currentColor" stroke="none"/>
+  <path id="hand-left-0" d="M100.98 745.85c-9.03-6.62-15.78-13.18-13.3-24.59 2.67-12.29 15.01-20.6 25.37-26.21 7.76-4.21 18.22-1.68 26.15.97 7.14 2.39 11.11 6.16 11.1 13.86q-.04 18.51-4.75 36.37c-5.47 20.76-34.48 6.99-44.57-.4z" fill="currentColor" stroke="none"/>
+  <path id="hand-right-0" d="M591.31 755.99c-8.06-2.93-8.66-9.76-10.28-17.06q-3.22-14.42-3.1-29.3.04-4.06 1.46-6.55c4.34-7.57 18.16-9.91 25.63-10.35 8.75-.51 18.37 6.96 24.99 12.27q8.92 7.17 10.74 17.52c2.45 13.89-12.11 23.41-22.7 29.04-6.95 3.69-18.63 7.39-26.74 4.43z" fill="currentColor" stroke="none"/>
 </defs>
 </svg>
 
@@ -1093,16 +1116,23 @@ function updateCount() {
 }
 
 function muscleThumbSVG(mid, colour) {
-  const frontMuscles = ['VL','VM','RF','TA'];
+  const frontMuscles = ['VL','VM','RF','TA','MD','BB','BR','FCR','ECR','FDI','FDS'];
+  const armMuscles = ['MD','BB','BR','FCR','ECR','FDI','FDS'];
   const isFront = frontMuscles.includes(mid);
-  const vb = isFront ? '0 700 724 748' : '724 700 724 748';
+  const isArm = armMuscles.includes(mid);
+  const vb = isArm ? '0 0 724 850' : (isFront ? '0 700 724 748' : '724 700 724 748');
+  const rectH = isArm ? '850' : '748';
   const outlineId = isFront ? 'body-front' : 'body-back';
   let musclePathId = 'quad-left-0';
   if (['VL','VM','RF'].includes(mid)) musclePathId = 'quad-left-0';
   else if (['BF','ST'].includes(mid)) musclePathId = 'ham-left-0';
   else if (['GM','GL'].includes(mid)) musclePathId = 'calf-left-0';
   else if (mid === 'TA') musclePathId = 'tib-left-0';
-  return '<svg viewBox="' + vb + '" width="36" height="64"><rect width="724" height="748" fill="#1a1f2e"/><use href="#' + outlineId + '" stroke="rgba(255,255,255,0.08)" stroke-width="2"/><use href="#' + musclePathId + '" fill="' + colour + '33" stroke="' + colour + '88" stroke-width="1"/></svg>';
+  else if (mid === 'MD') musclePathId = 'deltoid-left-0';
+  else if (mid === 'BB') musclePathId = 'biceps-left-0';
+  else if (['BR','FCR','ECR','FDS'].includes(mid)) musclePathId = 'forearm-left-0';
+  else if (mid === 'FDI') musclePathId = 'hand-left-0';
+  return '<svg viewBox="' + vb + '" width="36" height="64"><rect width="724" height="' + rectH + '" fill="#1a1f2e"/><use href="#' + outlineId + '" stroke="rgba(255,255,255,0.08)" stroke-width="2"/><use href="#' + musclePathId + '" fill="' + colour + '33" stroke="' + colour + '88" stroke-width="1"/></svg>';
 }
 
 // ═══ ANALYSIS ═══
@@ -1244,16 +1274,22 @@ function showResults(selected) {
 // ═══ MUSCLE MAP (MuscleMapJS canvas widget) ═══
 const MM_MUSCLE_MAP = {
   'VL': 'outer-quad', 'VM': 'inner-quad', 'RF': 'quadriceps', 'TA': 'tibialis',
-  'BF': 'hamstring', 'ST': 'hamstring', 'GM': 'calves', 'GL': 'calves'
+  'BF': 'hamstring', 'ST': 'hamstring', 'GM': 'calves', 'GL': 'calves',
+  'MD': 'deltoids', 'BB': 'biceps', 'BR': 'forearm', 'FCR': 'forearm',
+  'ECR': 'forearm', 'FDI': 'hands', 'FDS': 'forearm'
 };
-const MM_FRONT_MUSCLES = ['VL','VM','RF','TA'];
+const MM_FRONT_MUSCLES = ['VL','VM','RF','TA','MD','BB','BR','FCR','ECR','FDI','FDS'];
 const MM_FRIENDLY = {
   'outer-quad':'Vastus Lateralis (VL)',
   'inner-quad':'Vastus Medialis (VM)',
   'quadriceps':'Quadriceps (RF)',
   'tibialis':'Tibialis Anterior (TA)',
   'hamstring':'Hamstrings (BF, ST)',
-  'calves':'Calves (GM, GL)'
+  'calves':'Calves (GM, GL)',
+  'deltoids':'Deltoid (MD)',
+  'biceps':'Biceps (BB)',
+  'forearm':'Forearm (BR, FCR, ECR, FDS)',
+  'hands':'Hand (FDI)'
 };
 
 function ensureMMWidget(containerId, withLegend) {
