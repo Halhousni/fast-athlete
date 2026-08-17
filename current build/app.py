@@ -834,6 +834,10 @@ input[type=file]{display:none}
       <div style="font-size:14px;font-weight:600;margin:12px 0 8px">Select muscles to check</div>
       <div class="muscle-grid" id="muscle-grid"></div>
       <div id="selection-count" style="font-size:12px;color:var(--text-dim);margin-bottom:8px">0 selected</div>
+      <div class="card" id="selection-map-card" style="margin-top:12px">
+        <div class="card-header">WHERE ARE THE MUSCLES?</div>
+        <div class="muscle-map" id="selection-map"></div>
+      </div>
     </div>
   </div>
 
@@ -1035,11 +1039,13 @@ function buildMuscleGrid() {
   });
   document.getElementById('analyse-bar').style.display = 'flex';
   updateCount();
+  updateSelectionMap();
 }
 
 function toggleMuscle(el) {
   el.classList.toggle('selected');
   updateCount();
+  updateSelectionMap();
 }
 
 function updateCount() {
@@ -1197,14 +1203,89 @@ function showResults(selected) {
   saveAssessment(avgScore, overallStatus);
 }
 
+// ═══ MUSCLE MAP (MuscleMapJS canvas widget) ═══
+const MM_MUSCLE_MAP = {
+  'VL': 'outer-quad', 'VM': 'inner-quad', 'RF': 'quadriceps', 'TA': 'tibialis',
+  'BF': 'hamstring', 'ST': 'hamstring', 'GM': 'calves', 'GL': 'calves'
+};
+const MM_FRONT_MUSCLES = ['VL','VM','RF','TA'];
+const MM_FRIENDLY = {
+  'outer-quad':'Vastus Lateralis (VL)',
+  'inner-quad':'Vastus Medialis (VM)',
+  'quadriceps':'Quadriceps (RF)',
+  'tibialis':'Tibialis Anterior (TA)',
+  'hamstring':'Hamstrings (BF, ST)',
+  'calves':'Calves (GM, GL)'
+};
+
+function ensureMMWidget(containerId, withLegend) {
+  const container = document.getElementById(containerId);
+  const wm = window.__mmWidgets || (window.__mmWidgets = {});
+  if (wm[containerId]) return wm[containerId];
+  container.innerHTML = '';
+  const toggle = document.createElement('div');
+  toggle.className = 'mm-toggle';
+  toggle.innerHTML = '<button type="button" data-side="front" class="mm-toggle-btn">FRONT</button><button type="button" data-side="back" class="mm-toggle-btn">BACK</button>';
+  const btns = toggle.querySelectorAll('button');
+  btns[0].classList.add('active');
+  btns.forEach(b => b.addEventListener('click', () => {
+    wm[containerId].setSide(b.getAttribute('data-side'));
+    btns.forEach(x => x.classList.toggle('active', x === b));
+  }));
+  container.appendChild(toggle);
+  const wrap = document.createElement('div');
+  wrap.className = 'mm-canvas';
+  container.appendChild(wrap);
+  if (withLegend) {
+    const legend = document.createElement('div');
+    legend.className = 'mm-legend';
+    legend.innerHTML = '<div class="mm-legend-bar"></div><div class="mm-legend-labels"><span>Fatigued</span><span>Some fatigue</span><span>Recovered</span></div>';
+    container.appendChild(legend);
+  }
+  const w = wm[containerId] = new MuscleMapJS.MuscleMapWidget(wrap, { gender:'male', side:'front', interactive:true, multiSelect:false, showSubGroups:true });
+  w.setStyle({
+    defaultFillColor:'#1a1f2e',
+    strokeColor:'rgba(255,255,255,0.12)',
+    strokeWidth:1,
+    selectionColor:'#00E5FF',
+    selectionStrokeColor:'#00E5FF',
+    selectionStrokeWidth:2,
+    headColor:'rgb(45,52,72)',
+    hairColor:'rgb(20,24,36)',
+    shadowColor:'transparent',
+    shadowRadius:0,
+    shadowOffsetX:0,
+    shadowOffsetY:0
+  });
+  w.enableTooltip(muscle => {
+    const n = MM_FRIENDLY[muscle] || (MuscleMapJS.MUSCLE_DISPLAY_NAMES[muscle] || muscle);
+    return '<b>' + n + '</b>';
+  });
+  w.on('muscleClick', () => w.clearSelection());
+  w.setSideBtn = (side) => { btns.forEach(x => x.classList.toggle('active', x.getAttribute('data-side') === side)); };
+  return w;
+}
+
+function updateSelectionMap() {
+  const ids = Array.from(document.querySelectorAll('#muscle-grid .muscle-card.selected')).map(c => c.dataset.id);
+  const w = ensureMMWidget('selection-map', false);
+  w.clearHighlights();
+  if (!ids.length) return;
+  let anyFront = false, anyBack = false;
+  ids.forEach(mid => {
+    const slug = MM_MUSCLE_MAP[mid];
+    if (!slug) return;
+    if (MM_FRONT_MUSCLES.indexOf(mid) >= 0) anyFront = true; else anyBack = true;
+    w.highlightSide(slug, 'right', 'rgba(0,229,255,0.45)', 1);
+  });
+  // Auto-flip to the view that contains the selected muscles
+  if (anyFront && !anyBack) { w.setSide('front'); w.setSideBtn('front'); }
+  else if (anyBack && !anyFront) { w.setSide('back'); w.setSideBtn('back'); }
+}
+
 function buildMuscleMap(selected) {
   const calloutRow = document.getElementById('callout-row');
   calloutRow.innerHTML = '';
-  // FAST channel -> MuscleMapJS region (right leg assessed)
-  const MM_MUSCLE_MAP = {
-    'VL': 'outer-quad', 'VM': 'inner-quad', 'RF': 'quadriceps', 'TA': 'tibialis',
-    'BF': 'hamstring', 'ST': 'hamstring', 'GM': 'calves', 'GL': 'calves'
-  };
   const slugState = {};
   selected.forEach(m => {
     const r = m.result||{};
@@ -1223,61 +1304,8 @@ function buildMuscleMap(selected) {
     calloutRow.innerHTML += '<div class="callout"><span class="callout-dot" style="background:' + colorVar + '"></span><span>' + mid + ': <b>' + label + '</b></span></div>';
   });
 
-  // Build the interactive canvas widget once, reuse on re-analysis
-  const container = document.getElementById('muscle-map-svg');
-  let w = window.__mmWidget;
-  if (!w) {
-    container.innerHTML = '';
-    const toggle = document.createElement('div');
-    toggle.className = 'mm-toggle';
-    toggle.innerHTML = '<button type="button" data-side="front" class="mm-toggle-btn">FRONT</button><button type="button" data-side="back" class="mm-toggle-btn">BACK</button>';
-    const btns = toggle.querySelectorAll('button');
-    btns[0].classList.add('active');
-    btns.forEach(b => b.addEventListener('click', () => {
-      window.__mmSide = b.getAttribute('data-side');
-      btns.forEach(x => x.classList.toggle('active', x === b));
-      w.setSide(window.__mmSide);
-    }));
-    container.appendChild(toggle);
-    const wrap = document.createElement('div');
-    wrap.className = 'mm-canvas';
-    container.appendChild(wrap);
-    const legend = document.createElement('div');
-    legend.className = 'mm-legend';
-    legend.innerHTML = '<div class="mm-legend-bar"></div><div class="mm-legend-labels"><span>Fatigued</span><span>Some fatigue</span><span>Recovered</span></div>';
-    container.appendChild(legend);
-
-    w = window.__mmWidget = new MuscleMapJS.MuscleMapWidget(wrap, { gender:'male', side:'front', interactive:true, multiSelect:false, showSubGroups:true });
-    w.setStyle({
-      defaultFillColor:'#1a1f2e',
-      strokeColor:'rgba(255,255,255,0.12)',
-      strokeWidth:1,
-      selectionColor:'#00E5FF',
-      selectionStrokeColor:'#00E5FF',
-      selectionStrokeWidth:2,
-      headColor:'rgb(45,52,72)',
-      hairColor:'rgb(20,24,36)',
-      shadowColor:'transparent',
-      shadowRadius:0,
-      shadowOffsetX:0,
-      shadowOffsetY:0
-    });
-    w.enableTooltip(muscle => {
-      const names = {
-        'outer-quad':'Vastus Lateralis (VL)',
-        'inner-quad':'Vastus Medialis (VM)',
-        'quadriceps':'Quadriceps (RF)',
-        'tibialis':'Tibialis Anterior (TA)',
-        'hamstring':'Hamstrings (BF, ST)',
-        'calves':'Calves (GM, GL)'
-      };
-      const n = names[muscle] || (MuscleMapJS.MUSCLE_DISPLAY_NAMES[muscle] || muscle);
-      return '<b>' + n + '</b>';
-    });
-    w.on('muscleClick', () => w.clearSelection());
-  }
-
   // Apply right-leg highlights: worst score per region drives the heat colour
+  const w = ensureMMWidget('muscle-map-svg', true);
   w.clearHighlights();
   for (const slug in slugState) {
     const st = slugState[slug];
