@@ -515,7 +515,7 @@ input[type=file]{display:none}
 
 /* Muscle map */
 .muscle-map{position:relative;display:flex;justify-content:center;padding:20px 0}
-.muscle-map svg{width:200px;height:auto;max-height:360px}
+.muscle-map svg{width:min(300px,100%);height:auto}
 .muscle-map .body-outline{fill:none;stroke:rgba(255,255,255,0.15);stroke-width:1.5}
 .muscle-map .muscle-region{cursor:pointer;transition:opacity .3s}
 
@@ -603,7 +603,7 @@ input[type=file]{display:none}
   .gauge-value{font-size:52px}
   .steps{flex-direction:row;gap:12px}
   .step{flex:1;flex-direction:column}
-  .muscle-map svg{width:240px}
+  .muscle-map svg{width:min(360px,100%)}
   #results-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 20px}
   .result-card>div:nth-child(2){min-width:0}
 }
@@ -1185,29 +1185,71 @@ function showResults(selected) {
 function buildMuscleMap(selected) {
   const calloutRow = document.getElementById('callout-row');
   calloutRow.innerHTML = '';
-  let musclePaths = '';
+  const REGIONS = {
+    'quad-right': {view:'front', ids:['quad-right-0','quad-right-1'], muscles:['VL','VM','RF']},
+    'tib-right':  {view:'front', ids:['tib-right-0','tib-right-1'],  muscles:['TA']},
+    'ham-right':  {view:'back',  ids:['ham-right-0','ham-right-1','ham-right-2','ham-right-3'], muscles:['BF','ST']},
+    'calf-right': {view:'back',  ids:['calf-right-0'], muscles:['GM','GL']}
+  };
+  const regionState = {};
   selected.forEach(m => {
     const r = m.result||{};
     const status = r.status||'grey';
-    let fillColor, strokeColor;
-    if (status==='green') { fillColor='rgba(0,230,118,0.25)'; strokeColor='rgba(0,230,118,0.5)'; }
-    else if (status==='amber') { fillColor='rgba(255,145,0,0.25)'; strokeColor='rgba(255,145,0,0.5)'; }
-    else if (status==='red') { fillColor='rgba(239,68,68,0.25)'; strokeColor='rgba(239,68,68,0.5)'; }
-    else { fillColor='rgba(255,255,255,0.05)'; strokeColor='rgba(255,255,255,0.1)'; }
     const mid = m.id||m.column;
-    let muscleId = 'quad-right-0';
-    if (['VL','VM','RF'].includes(mid)) muscleId = 'quad-right-0';
-    else if (['BF','ST'].includes(mid)) muscleId = 'ham-right-0';
-    else if (['GM','GL'].includes(mid)) muscleId = 'calf-right-0';
-    else if (mid==='TA') muscleId = 'tib-right-0';
-    musclePaths += '<use href="#' + muscleId + '" fill="' + fillColor + '" stroke="' + strokeColor + '" stroke-width="1.5"/>';
+    let regionKey = null;
+    for (const k in REGIONS) { if (REGIONS[k].muscles.indexOf(mid) >= 0) { regionKey = k; break; } }
+    if (regionKey) {
+      if (!regionState[regionKey]) regionState[regionKey] = {minScore: Infinity, hasScore: false};
+      if (r.score != null && status !== 'grey') {
+        regionState[regionKey].hasScore = true;
+        if (r.score < regionState[regionKey].minScore) regionState[regionKey].minScore = r.score;
+      }
+    }
     const colorVar = status==='green'?'var(--green)':status==='amber'?'var(--amber)':status==='red'?'var(--red)':'var(--text-dim)';
     const label = status==='green'?'Recovered':status==='amber'?'Moderate fatigue':status==='red'?'Fatigued':'No data';
-    calloutRow.innerHTML += '<div class="callout"><span class="callout-dot" style="background:' + colorVar + '"></span><span>' + (m.id||m.column) + ': <b>' + label + '</b></span></div>';
+    calloutRow.innerHTML += '<div class="callout"><span class="callout-dot" style="background:' + colorVar + '"></span><span>' + mid + ': <b>' + label + '</b></span></div>';
   });
-
+  let frontUses = '', backUses = '';
+  for (const k in REGIONS) {
+    const reg = REGIONS[k];
+    if (!regionState[k]) continue;
+    let fillColor, strokeColor;
+    if (!regionState[k].hasScore) { fillColor='rgba(255,255,255,0.05)'; strokeColor='rgba(255,255,255,0.1)'; }
+    else {
+      const c = heatColor(regionState[k].minScore);
+      fillColor = 'rgba(' + c + ',0.32)';
+      strokeColor = 'rgba(' + c + ',0.65)';
+    }
+    let uses = '';
+    for (let i = 0; i < reg.ids.length; i++) {
+      uses += '<use href="#' + reg.ids[i] + '" fill="' + fillColor + '" stroke="' + strokeColor + '" stroke-width="1.5"/>';
+    }
+    if (reg.view === 'front') frontUses += uses; else backUses += uses;
+  }
   document.getElementById('muscle-map-svg').innerHTML =
-    '<svg viewBox="0 700 724 748" width="200" height="207"><use href="#body-front" class="body-outline" stroke="rgba(255,255,255,0.2)" stroke-width="2"/>' + musclePaths + '</svg>';
+    '<div style="display:flex;flex-direction:column;align-items:center;gap:10px">' +
+    '<svg viewBox="0 700 1448 748"><use href="#body-front" class="body-outline"/>' + frontUses +
+    '<use href="#body-back" class="body-outline"/>' + backUses + '</svg>' +
+    '<div style="width:min(240px,80%);display:flex;flex-direction:column;gap:4px">' +
+    '<div style="height:8px;border-radius:4px;background:linear-gradient(90deg,#ef4444,#FF9100,#00E676)"></div>' +
+    '<div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text-dim)">' +
+    '<span>Fatigued</span><span>Some fatigue</span><span>Recovered</span></div></div></div>';
+}
+
+function heatColor(score) {
+  const s = Math.max(0, Math.min(100, Number(score) || 0));
+  const stops = [[0,239,68,68],[35,255,145,0],[70,0,230,118],[100,0,230,118]];
+  for (let i = 0; i < stops.length - 1; i++) {
+    const s0 = stops[i][0], s1 = stops[i+1][0];
+    if (s >= s0 && s <= s1) {
+      const t = (s - s0) / (s1 - s0 || 1);
+      const r = Math.round(stops[i][1] + (stops[i+1][1] - stops[i][1]) * t);
+      const g = Math.round(stops[i][2] + (stops[i+1][2] - stops[i][2]) * t);
+      const b = Math.round(stops[i][3] + (stops[i+1][3] - stops[i][3]) * t);
+      return r + ',' + g + ',' + b;
+    }
+  }
+  return '239,68,68';
 }
 
 // ═══ PROFILES ═══
