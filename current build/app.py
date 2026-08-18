@@ -254,6 +254,17 @@ async def verify_profile(data: dict):
         return JSONResponse({'error': 'Wrong PIN'}, status_code=403)
     return {'id': pid, 'name': row['name']}
 
+@app.delete('/api/profiles/{profile_id}')
+async def delete_profile(profile_id: int):
+    conn = _db()
+    conn.execute('DELETE FROM results WHERE profile_id=?', (profile_id,))
+    cur = conn.execute('DELETE FROM profiles WHERE id=?', (profile_id,))
+    conn.commit()
+    conn.close()
+    if cur.rowcount == 0:
+        return JSONResponse({'error': 'Profile not found'}, status_code=404)
+    return {'ok': True}
+
 @app.post('/api/save')
 async def save_result(data: dict):
     pid = data.get('profile_id')
@@ -768,6 +779,13 @@ input[type=file]{display:none}
 .week-dot{width:14px;height:14px;border-radius:50%;box-shadow:0 0 6px rgba(0,0,0,0.3)}
 .week-dot.empty{background:rgba(255,255,255,0.07);border:1px dashed var(--border);box-shadow:none}
 .week-label{font-size:9px;color:var(--text-faint);font-weight:600;text-transform:uppercase;letter-spacing:.04em}
+
+/* ═══ Profile tab ═══ */
+#profile-current{margin-top:16px}
+.profile-avatar.large{width:48px;height:48px;font-size:20px}
+.profile-del{background:none;border:none;color:var(--text-faint);cursor:pointer;padding:6px;flex-shrink:0;transition:color .15s}
+.profile-del:hover{color:var(--red)}
+.profile-del svg{width:16px;height:16px;display:block}
 </style>
 </head>
 <body>
@@ -819,20 +837,18 @@ input[type=file]{display:none}
       <svg width="22" height="22" viewBox="0 0 448 512" fill="currentColor"><path d="M224 0c-17.7 0-32 14.3-32 32V49.9C119.5 61.4 64 124.2 64 200v33.4c0 45.4-15.5 89.5-43.8 124.9L5.3 377c-5.8 7.2-6.9 17.1-2.9 25.4S14.8 416 24 416H424c9.2 0 17.6-5.3 21.6-13.6s2.9-18.2-2.9-25.4l-14.9-18.6C399.5 322.9 384 278.8 384 233.4V200c0-75.8-55.5-138.6-128-150.1V32c0-17.7-14.3-32-32-32zm0 96h8c57.4 0 104 46.6 104 104v33.4c0 47.9 13.9 94.6 39.7 134.6H72.3C98.1 328 112 281.3 112 233.4V200c0-57.4 46.6-104 104-104h8zm64 352H224 160c0 17 6.7 33.3 18.7 45.3s28.3 18.7 45.3 18.7 33.3-6.7 45.3-18.7s18.7-28.3 18.7-45.3z"/></svg>
       <span class="notif-badge hidden" id="notif-badge">0</span>
     </button>
-    <button class="profile-chip" id="profile-chip" onclick="openProfileSheet()">
+    <button class="profile-chip" id="profile-chip" onclick="navTo('profile')">
       <span class="profile-avatar" id="profile-avatar">G</span>
       <span class="profile-name" id="profile-name">Guest</span>
     </button>
   </div>
 </header>
 
-<!-- ═══ PROFILE SHEET ═══ -->
-<div class="sheet-overlay hidden" id="profile-sheet" onclick="if(event.target===this)closeProfileSheet()">
-  <div class="sheet">
-    <div class="sheet-header">
-      <span class="sheet-title">WHO IS CHECKING?</span>
-      <button class="sheet-close" onclick="closeProfileSheet()">✕</button>
-    </div>
+<!-- ═══ SCREEN 7: PROFILE ═══ -->
+<div class="section" id="screen-profile">
+  <div id="profile-current"></div>
+  <div class="card">
+    <div class="card-header">WHO IS CHECKING?</div>
     <div id="profile-list"></div>
     <div class="hidden" id="pin-box" style="margin-top:4px">
       <div class="sheet-pin-row" style="margin-bottom:8px">
@@ -850,6 +866,10 @@ input[type=file]{display:none}
       </div>
       <div class="sheet-hint">Profiles keep your results saved on this server. A 4-digit PIN is optional.</div>
     </div>
+  </div>
+  <div class="card">
+    <div class="card-header">ABOUT</div>
+    <div class="tip-body">FAST ATHLETE — fatigue assessment from your sEMG recordings. Scores reflect muscle recovery: 70 and above is recovered, 40 to 69 is some fatigue, below 40 needs rest. Results are stored on this server.</div>
   </div>
 </div>
 
@@ -1093,7 +1113,7 @@ input[type=file]{display:none}
     <svg viewBox="0 0 24 24" fill="currentColor"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg>
     <span class="nav-label">Train</span>
   </button>
-  <button class="nav-item" data-screen="profile" onclick="openProfileSheet()">
+  <button class="nav-item" data-screen="profile" onclick="navTo('profile')">
     <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>
     <span class="nav-label">Profile</span>
   </button>
@@ -1131,6 +1151,7 @@ function navTo(screen) {
   currentScreen = screen;
   if (screen === 'history') loadHistory();
   if (screen === 'train') loadTrain();
+  if (screen === 'profile') loadProfileScreen();
 }
 
 function startNewAssessment() {
@@ -1504,8 +1525,46 @@ function heatColor(score) {
 // ═══ PROFILES ═══
 try { profile = JSON.parse(localStorage.getItem('fast_profile') || 'null'); } catch(e) { profile = null; }
 
-function openProfileSheet() { loadProfiles(); document.getElementById('profile-sheet').classList.remove('hidden'); }
-function closeProfileSheet() { document.getElementById('profile-sheet').classList.add('hidden'); }
+function openProfileSheet() { navTo('profile'); }
+
+async function loadProfileScreen() {
+  const cur = document.getElementById('profile-current');
+  if (!cur) return;
+  let stats = null;
+  if (profile) {
+    try {
+      const resp = await fetch('/api/history?profile_id=' + profile.id);
+      const data = await resp.json();
+      const h = data.history || [];
+      const scores = h.map(x => x.avg_score).filter(s => s != null);
+      stats = {
+        n: h.length,
+        best: scores.length ? Math.round(Math.max(...scores)) : null,
+        avg: scores.length ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : null
+      };
+    } catch(e) {}
+  }
+  if (profile) {
+    const parts = [];
+    if (stats && stats.n > 0) {
+      parts.push(stats.n + ' assessment' + (stats.n > 1 ? 's' : ''));
+      parts.push('Best ' + stats.best);
+      parts.push('Average ' + stats.avg);
+    } else {
+      parts.push('No assessments yet');
+    }
+    cur.innerHTML = '<div class="card fade-up"><div class="card-header">CURRENT PROFILE</div>' +
+      '<div class="train-hero">' +
+      '<span class="profile-avatar large">' + profile.name.charAt(0).toUpperCase() + '</span>' +
+      '<div class="train-hero-text"><div class="train-verdict" style="color:var(--text)">' + profile.name + '</div>' +
+      '<div class="train-sub">' + parts.join(' · ') + '</div></div>' +
+      '<span class="profile-active">ACTIVE</span></div></div>';
+  } else {
+    cur.innerHTML = '<div class="card fade-up"><div class="card-header">CURRENT PROFILE</div>' +
+      '<div class="empty-state" style="padding:24px 20px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="7" r="4"/><path d="M5 21v-1a7 7 0 0114 0v1"/></svg>Browsing as Guest — add a profile below to save and track results.</div></div>';
+  }
+  await loadProfiles();
+}
 
 async function loadProfiles() {
   try {
@@ -1516,16 +1575,43 @@ async function loadProfiles() {
     list.innerHTML = '';
     profileList.forEach(p => {
       const isActive = profile && profile.id === p.id;
+      if (deleteTarget === p.id) {
+        list.innerHTML += '<div class="profile-row" style="flex-wrap:wrap"><div style="flex:1 1 100%;font-size:12px;color:var(--red);margin-bottom:8px">Delete ' + p.name + '? This removes their saved results.</div>' +
+          '<div style="display:flex;gap:8px;margin-left:auto">' +
+          '<button class="btn-outline" style="padding:6px 14px;font-size:11px" onclick="event.stopPropagation();cancelDelete()">Cancel</button>' +
+          '<button class="btn-primary" style="width:auto;padding:6px 14px;font-size:11px;background:var(--red);color:#fff" onclick="event.stopPropagation();confirmDelete(' + p.id + ')">Delete</button></div></div>';
+        return;
+      }
       list.innerHTML += '<div class="profile-row"' + (isActive ? ' style="border-color:var(--cyan)"' : '') + ' onclick="onProfileClick(' + p.id + ')">' +
         '<span class="profile-avatar">' + p.name.charAt(0).toUpperCase() + '</span>' +
         '<span class="profile-row-name">' + p.name + '</span>' +
         (p.has_pin ? '<span style="font-size:10px;color:var(--text-faint)">PIN</span>' : '') +
-        (isActive ? '<span class="profile-active">ACTIVE</span>' : '') + '</div>';
+        (isActive ? '<span class="profile-active">ACTIVE</span>' : '') +
+        '<button class="profile-del" onclick="event.stopPropagation();askDeleteProfile(' + p.id + ')" aria-label="Delete ' + p.name + '"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6"/></svg></button></div>';
     });
     if (!profileList.length) {
       list.innerHTML = '<div style="font-size:13px;color:var(--text-faint);padding:8px 0">No profiles yet — add one below.</div>';
     }
   } catch(e) {}
+}
+
+let deleteTarget = null;
+function askDeleteProfile(id) { deleteTarget = id; loadProfiles(); }
+function cancelDelete() { deleteTarget = null; loadProfiles(); }
+async function confirmDelete(id) {
+  deleteTarget = null;
+  try {
+    const resp = await fetch('/api/profiles/' + id, {method: 'DELETE'});
+    if (!resp.ok) { toast('Could not delete profile.'); return; }
+    if (profile && profile.id === id) {
+      profile = null;
+      localStorage.removeItem('fast_profile');
+      updateProfileChip();
+    }
+    await loadProfiles();
+    await loadProfileScreen();
+    toast('Profile deleted.');
+  } catch(e) { toast('Could not delete profile.'); }
 }
 
 async function selectProfile(id) {
@@ -1534,7 +1620,7 @@ async function selectProfile(id) {
   profile = {id: p.id, name: p.name};
   localStorage.setItem('fast_profile', JSON.stringify(profile));
   updateProfileChip();
-  closeProfileSheet();
+  loadProfileScreen();
   toast('Profile: ' + p.name);
 }
 
@@ -1567,7 +1653,7 @@ async function confirmPin() {
   profile = {id: data.id, name: data.name};
   localStorage.setItem('fast_profile', JSON.stringify(profile));
   updateProfileChip();
-  closeProfileSheet();
+  loadProfileScreen();
   toast('Profile: ' + data.name);
 }
 
@@ -1580,13 +1666,13 @@ async function createProfile() {
     body: JSON.stringify({name: name, pin: pin || undefined})
   });
   const data = await resp.json();
-  if (data.error) { alert(data.error); return; }
+  if (data.error) { toast(data.error); return; }
   document.getElementById('new-profile-name').value = '';
   document.getElementById('new-profile-pin').value = '';
   profile = {id: data.id, name: data.name};
   localStorage.setItem('fast_profile', JSON.stringify(profile));
   updateProfileChip();
-  await loadProfiles();
+  await loadProfileScreen();
   toast('Profile added: ' + data.name);
 }
 
