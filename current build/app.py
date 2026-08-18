@@ -729,6 +729,26 @@ input[type=file]{display:none}
 /* Empty state */
 .empty-state{text-align:center;color:var(--text-dim);font-size:13px;padding:36px 20px;line-height:1.7}
 .empty-state svg{width:34px;height:34px;color:var(--text-faint);margin-bottom:10px;opacity:.7}
+
+/* ═══ History upgrade ═══ */
+.filter-row{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 12px}
+.filter-chip{background:rgba(255,255,255,0.05);border:1px solid var(--border);color:var(--text-dim);font-family:Inter,sans-serif;font-size:11px;font-weight:700;letter-spacing:.05em;padding:6px 14px;border-radius:999px;cursor:pointer;transition:background .15s,color .15s,border-color .15s}
+.filter-chip:hover{color:var(--text)}
+.filter-chip.active{background:var(--cyan);border-color:var(--cyan);color:#06121a}
+.trend{width:100%;height:auto;display:block}
+.trend-box{width:100%}
+.trend-caption{font-size:11px;color:var(--text-faint);margin-top:8px;text-align:center}
+.hist-card-click{cursor:pointer;transition:border-color .15s}
+.hist-card-click:hover{border-color:rgba(0,229,255,0.35)}
+.hist-chevron{color:var(--text-faint);font-size:18px;flex-shrink:0;line-height:1}
+.hdetail-head{display:flex;align-items:center;gap:12px;margin-bottom:4px}
+.hdetail-score-big{font-size:34px;font-weight:800;letter-spacing:-.02em;min-width:72px}
+.hdetail-meta{font-size:12px;color:var(--text-dim);line-height:1.5}
+.hdetail-file{font-size:11px;color:var(--text-faint);word-break:break-all;margin-top:2px}
+.hdetail-row{display:flex;align-items:center;gap:10px;padding:11px 0;border-bottom:1px solid var(--border)}
+.hdetail-row:last-child{border-bottom:none}
+.hdetail-name{flex:1;min-width:0;font-size:13px;font-weight:500;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hdetail-score{font-size:15px;font-weight:700;min-width:30px;text-align:right}
 </style>
 </head>
 <body>
@@ -811,6 +831,17 @@ input[type=file]{display:none}
       </div>
       <div class="sheet-hint">Profiles keep your results saved on this server. A 4-digit PIN is optional.</div>
     </div>
+  </div>
+</div>
+
+<!-- ═══ HISTORY DETAIL SHEET ═══ -->
+<div class="sheet-overlay hidden" id="history-sheet" onclick="if(event.target===this)closeHistorySheet()">
+  <div class="sheet">
+    <div class="sheet-header">
+      <span class="sheet-title">ASSESSMENT DETAIL</span>
+      <button class="sheet-close" onclick="closeHistorySheet()">✕</button>
+    </div>
+    <div id="history-detail"></div>
   </div>
 </div>
 
@@ -1010,7 +1041,10 @@ input[type=file]{display:none}
 
 <!-- ═══ SCREEN 5: HISTORY ═══ -->
 <div class="section" id="screen-history">
-  <div style="font-size:12px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:.06em;margin:16px 0 12px">SAVED ASSESSMENTS</div>
+  <div id="history-trend"></div>
+  <div id="history-summary"></div>
+  <div id="history-filters"></div>
+  <div style="font-size:12px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:.08em;margin:16px 0 12px">SAVED ASSESSMENTS</div>
   <div id="history-list"></div>
 </div>
 
@@ -1116,7 +1150,7 @@ async function handleFile(file) {
   try {
     const resp = await fetch('/api/upload', { method: 'POST', body: formData });
     const data = await resp.json();
-    if (data.error) { alert(data.error); return; }
+    if (data.error) { toast(data.error); return; }
     sessionData = data;
     muscles = data.muscles;
     uploadZone.classList.add('has-file');
@@ -1125,7 +1159,7 @@ async function handleFile(file) {
     document.getElementById('file-chip-name').textContent = file.name;
     document.getElementById('file-chip-meta').textContent = data.duration.toFixed(0) + 's, ' + data.fs + ' Hz, ' + data.cols.length + ' channels';
     buildMuscleGrid();
-  } catch(e) { alert('Upload failed: ' + e.message); }
+  } catch(e) { toast('Upload failed: ' + e.message); }
 }
 
 function buildMuscleGrid() {
@@ -1183,7 +1217,7 @@ async function runAnalysis() {
     return m || {id: mid, column: col, name: col, desc: 'Channel'};
   }).filter(Boolean);
 
-  if (!selected.length) { alert('Select at least one muscle'); return; }
+  if (!selected.length) { toast('Pick at least one muscle first.'); return; }
 
   navTo('progress');
   document.getElementById('prog-label').textContent = 'Running FAST analysis...';
@@ -1303,6 +1337,7 @@ function showResults(selected) {
   todayBar.style.background = gaugeColor;
 
   saveAssessment(avgScore, overallStatus);
+  setTimeout(updateResultsTrend, 1200);
 }
 
 // ═══ MUSCLE MAP (MuscleMapJS canvas widget) ═══
@@ -1498,7 +1533,7 @@ async function confirmPin() {
     body: JSON.stringify({id: pinTarget, pin: pin})
   });
   const data = await resp.json();
-  if (data.error) { alert(data.error); input.value = ''; input.focus(); return; }
+  if (data.error) { toast(data.error); input.value = ''; input.focus(); return; }
   document.getElementById('pin-box').classList.add('hidden');
   pinTarget = null;
   profile = {id: data.id, name: data.name};
@@ -1511,7 +1546,7 @@ async function confirmPin() {
 async function createProfile() {
   const name = document.getElementById('new-profile-name').value.trim();
   const pin = document.getElementById('new-profile-pin').value.trim();
-  if (!name) { alert('Enter a name'); return; }
+  if (!name) { toast('Enter a name first.'); return; }
   const resp = await fetch('/api/profiles', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({name: name, pin: pin || undefined})
@@ -1558,6 +1593,10 @@ async function saveAssessment(avgScore, overallStatus) {
 async function loadHistory() {
   const list = document.getElementById('history-list');
   if (!profile) {
+    historyData = [];
+    document.getElementById('history-trend').innerHTML = '';
+    document.getElementById('history-summary').innerHTML = '';
+    document.getElementById('history-filters').innerHTML = '';
     list.innerHTML = '<div class="card empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="7" r="4"/><path d="M5 21v-1a7 7 0 0114 0v1"/></svg>Pick a profile to see saved assessments.</div>';
     return;
   }
@@ -1566,36 +1605,174 @@ async function loadHistory() {
   try {
     const resp = await fetch('/api/history?profile_id=' + profile.id);
     const data = await resp.json();
-    const h = data.history || [];
-    if (!h.length) {
-      list.innerHTML = '<div class="card empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8v4l3 3"/><circle cx="12" cy="12" r="9"/></svg>No saved assessments yet for <b>' + profile.name + '</b>.</div>';
-      return;
-    }
-    list.innerHTML = '';
-    h.forEach(item => {
-      const d = new Date(item.ts);
-      const dateStr = d.toLocaleDateString('en-US', {month: 'short', day: 'numeric'}) + ' · ' + d.toLocaleTimeString('en-US', {hour: 'numeric', minute: '2-digit'});
-      const st = (item.status || '').toUpperCase();
-      let color = 'var(--green)';
-      if (st.indexOf('SOME') >= 0) color = 'var(--amber)';
-      else if (st.indexOf('FATIGUED') >= 0) color = 'var(--red)';
-      let chips = '';
-      (item.results || []).forEach(r => {
-        let c = 'var(--text-dim)';
-        if (r.status === 'green') c = 'var(--green)';
-        else if (r.status === 'amber') c = 'var(--amber)';
-        else if (r.status === 'red') c = 'var(--red)';
-        chips += '<span class="hist-chip"><span class="tl-dot" style="background:' + c + '"></span>' + r.id + '</span>';
-      });
-      list.innerHTML += '<div class="card"><div class="hist-head">' +
-        '<span class="hist-score" style="color:' + color + '">' + (item.avg_score != null ? Math.round(item.avg_score) + '%' : '—') + '</span>' +
-        '<div style="flex:1"><div class="hist-date">' + dateStr + '</div><div class="hist-file">' + (item.filename || '') + '</div></div>' +
-        '<span class="hist-status" style="color:' + color + '">' + st + '</span></div>' +
-        '<div class="hist-chips">' + chips + '</div></div>';
-    });
+    historyData = data.history || [];
+    historyFilter = 'all';
+    renderHistoryList();
   } catch(e) {
     list.innerHTML = '<div class="card empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l3 3"/></svg>Could not load history.</div>';
   }
+}
+
+// ═══ HISTORY UPGRADE: trend, summary, filters, detail ═══
+let historyData = [];
+let historyFilter = 'all';
+
+function statusClassOf(st) {
+  const s = (st || '').toUpperCase();
+  if (s.indexOf('SOME') >= 0) return 'amber';
+  if (s.indexOf('FATIGUED') >= 0) return 'red';
+  return 'green';
+}
+
+function trendSVG(items) {
+  const W = 320, H = 110, PAD = 12;
+  const n = items.length;
+  const yFor = s => (H - PAD - (s / 100) * (H - 2 * PAD)).toFixed(1);
+  const pts = items.map((it, i) => ({
+    x: (n === 1 ? W / 2 : PAD + i * (W - 2 * PAD) / (n - 1)).toFixed(1),
+    y: yFor(it.score), it
+  }));
+  const grid = '<line x1="' + PAD + '" y1="' + yFor(70) + '" x2="' + (W - PAD) + '" y2="' + yFor(70) + '" stroke="rgba(255,255,255,0.08)" stroke-dasharray="3 3"/>' +
+               '<line x1="' + PAD + '" y1="' + yFor(40) + '" x2="' + (W - PAD) + '" y2="' + yFor(40) + '" stroke="rgba(255,255,255,0.08)" stroke-dasharray="3 3"/>';
+  let body = grid;
+  if (n > 1) {
+    body += '<polyline points="' + pts.map(p => p.x + ',' + p.y).join(' ') + '" fill="none" stroke="var(--cyan)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" opacity="0.85"/>';
+  }
+  body += pts.map(p => {
+    const c = p.it.statusClass === 'green' ? 'var(--green)' : p.it.statusClass === 'amber' ? 'var(--amber)' : 'var(--red)';
+    return '<circle cx="' + p.x + '" cy="' + p.y + '" r="4" fill="#18181b" stroke="' + c + '" stroke-width="2.5"/>';
+  }).join('');
+  if (n > 1) {
+    body += '<text x="' + pts[0].x + '" y="' + (H - 2) + '" text-anchor="middle" font-size="9" fill="#7d7d85">' + pts[0].it.label + '</text>' +
+            '<text x="' + pts[n - 1].x + '" y="' + (H - 2) + '" text-anchor="middle" font-size="9" fill="#7d7d85">' + pts[n - 1].it.label + '</text>';
+  }
+  return '<svg class="trend" viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Score trend">' + body + '</svg>';
+}
+
+function renderHistoryList() {
+  const list = document.getElementById('history-list');
+  const trendBox = document.getElementById('history-trend');
+  const sumBox = document.getElementById('history-summary');
+  const filterBox = document.getElementById('history-filters');
+  if (!list) return;
+
+  const withScore = historyData
+    .filter(h => h.avg_score != null)
+    .map(h => ({
+      score: Math.round(h.avg_score),
+      statusClass: statusClassOf(h.status),
+      label: new Date(h.ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+    }))
+    .reverse();
+
+  if (withScore.length >= 1) {
+    trendBox.innerHTML = '<div class="card"><div class="card-header">YOUR TREND</div>' + trendSVG(withScore) +
+      '<div class="trend-caption">' + (withScore.length === 1 ? 'First assessment saved — do a few more to see your trend.' : 'Last ' + withScore.length + ' assessments · higher is better') + '</div></div>';
+  } else {
+    trendBox.innerHTML = '';
+  }
+
+  if (historyData.length) {
+    const scores = historyData.map(h => h.avg_score).filter(s => s != null);
+    const best = scores.length ? Math.round(Math.max(...scores)) : 0;
+    const avg = scores.length ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : 0;
+    sumBox.innerHTML = '<div class="summary-row" style="margin-bottom:12px">' +
+      '<div class="summary-card green"><div class="summary-num">' + best + '</div><div class="summary-label">Best</div></div>' +
+      '<div class="summary-card"><div class="summary-num" style="color:var(--cyan)">' + avg + '</div><div class="summary-label">Average</div></div>' +
+      '<div class="summary-card"><div class="summary-num" style="color:var(--text)">' + historyData.length + '</div><div class="summary-label">Assessments</div></div></div>';
+  } else {
+    sumBox.innerHTML = '';
+  }
+
+  filterBox.innerHTML = '<div class="filter-row">' +
+    [['all', 'All'], ['red', 'Needs rest'], ['amber', 'Some fatigue'], ['green', 'Recovered']].map((f, i) =>
+      '<button class="filter-chip' + (historyFilter === f[0] ? ' active' : '') + '" onclick="setHistoryFilter(' + i + ')">' + f[1] + '</button>'
+    ).join('') + '</div>';
+
+  const shown = historyFilter === 'all' ? historyData : historyData.filter(h => statusClassOf(h.status) === historyFilter);
+  if (!shown.length) {
+    list.innerHTML = '<div class="card empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8v4l3 3"/><circle cx="12" cy="12" r="9"/></svg>' +
+      (historyFilter === 'all' ? 'No saved assessments yet for <b>' + (profile ? profile.name : '') + '</b>.' : 'Nothing with this status yet.') + '</div>';
+    return;
+  }
+  list.innerHTML = '';
+  shown.forEach(item => {
+    const d = new Date(item.ts);
+    const dateStr = d.toLocaleDateString('en-US', {month: 'short', day: 'numeric'}) + ' · ' + d.toLocaleTimeString('en-US', {hour: 'numeric', minute: '2-digit'});
+    const st = (item.status || '').toUpperCase();
+    let color = 'var(--green)';
+    if (st.indexOf('SOME') >= 0) color = 'var(--amber)';
+    else if (st.indexOf('FATIGUED') >= 0) color = 'var(--red)';
+    let chips = '';
+    (item.results || []).forEach(r => {
+      let c = 'var(--text-dim)';
+      if (r.status === 'green') c = 'var(--green)';
+      else if (r.status === 'amber') c = 'var(--amber)';
+      else if (r.status === 'red') c = 'var(--red)';
+      chips += '<span class="hist-chip"><span class="tl-dot" style="background:' + c + '"></span>' + r.id + '</span>';
+    });
+    list.innerHTML += '<div class="card hist-card-click" onclick="openHistoryDetail(' + item.id + ')"><div class="hist-head">' +
+      '<span class="hist-score" style="color:' + color + '">' + (item.avg_score != null ? Math.round(item.avg_score) + '%' : '—') + '</span>' +
+      '<div style="flex:1"><div class="hist-date">' + dateStr + '</div><div class="hist-file">' + (item.filename || '') + '</div></div>' +
+      '<span class="hist-status" style="color:' + color + '">' + st + '</span>' +
+      '<span class="hist-chevron">›</span></div>' +
+      '<div class="hist-chips">' + chips + '</div></div>';
+  });
+}
+
+function setHistoryFilter(i) { historyFilter = ['all', 'red', 'amber', 'green'][i] || 'all'; renderHistoryList(); }
+
+function openHistoryDetail(id) {
+  const item = historyData.find(h => h.id === id);
+  if (!item) return;
+  const d = new Date(item.ts);
+  const dateStr = d.toLocaleDateString('en-US', {month: 'short', day: 'numeric'}) + ' · ' + d.toLocaleTimeString('en-US', {hour: 'numeric', minute: '2-digit'});
+  const color = item.avg_score >= 70 ? 'var(--green)' : item.avg_score >= 40 ? 'var(--amber)' : 'var(--red)';
+  const sc = statusClassOf(item.status);
+  const dotColor = sc === 'green' ? 'var(--green)' : sc === 'amber' ? 'var(--amber)' : 'var(--red)';
+  const rows = (item.results || []).map(r => {
+    let c = 'var(--text-dim)';
+    if (r.status === 'green') c = 'var(--green)';
+    else if (r.status === 'amber') c = 'var(--amber)';
+    else if (r.status === 'red') c = 'var(--red)';
+    return '<div class="hdetail-row"><span class="tl-dot" style="background:' + c + '"></span><span class="hdetail-name">' + (r.id || '') + ' - ' + (r.name || '') + '</span><span class="hdetail-score" style="color:' + c + '">' + (r.score != null ? r.score : '—') + '</span></div>';
+  }).join('');
+  document.getElementById('history-detail').innerHTML =
+    '<div class="hdetail-head"><span class="hdetail-score-big" style="color:' + color + '">' + (item.avg_score != null ? Math.round(item.avg_score) + '%' : '—') + '</span>' +
+    '<div class="hdetail-meta"><div>' + dateStr + '</div><div class="hdetail-file">' + (item.filename || '') + '</div></div>' +
+    '<span class="hist-status" style="color:' + color + '">' + (item.status || '').toUpperCase() + '</span></div>' +
+    '<div class="sheet-divider"></div>' +
+    (rows || '<div style="font-size:12px;color:var(--text-dim)">No muscle details saved.</div>');
+  document.getElementById('history-sheet').classList.remove('hidden');
+}
+
+function closeHistorySheet() {
+  document.getElementById('history-sheet').classList.add('hidden');
+}
+
+// ═══ RESULTS TREND (real history data) ═══
+async function updateResultsTrend() {
+  const box = document.getElementById('trend-chart');
+  if (!box) return;
+  if (!profile) {
+    box.innerHTML = '<div style="font-size:12px;color:var(--text-faint);text-align:center;padding:34px 10px">Add a profile to track your trend.</div>';
+    return;
+  }
+  try {
+    const resp = await fetch('/api/history?profile_id=' + profile.id);
+    const data = await resp.json();
+    const h = (data.history || []).filter(x => x.avg_score != null).reverse();
+    if (!h.length) {
+      box.innerHTML = '<div style="font-size:12px;color:var(--text-faint);text-align:center;padding:34px 10px">Your trend appears here after a few assessments.</div>';
+      return;
+    }
+    box.className = 'trend-box';
+    box.innerHTML = trendSVG(h.slice(-7).map(x => ({
+      score: Math.round(x.avg_score),
+      statusClass: statusClassOf(x.status),
+      label: new Date(x.ts).toLocaleDateString('en-US', {month: 'short', day: 'numeric'})
+    })));
+  } catch(e) {}
 }
 
 // ═══ TOAST ═══
