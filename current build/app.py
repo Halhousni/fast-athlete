@@ -11,9 +11,11 @@ import pandas as pd
 from scipy.signal import butter, filtfilt
 from ssqueezepy import ssq_cwt
 from fastapi import FastAPI, UploadFile, File, Form
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 import uvicorn
 from bowen_centroid import run_bowen_pipeline
+
+_APP_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # ═══════════════════════════════════════════════════
 # FAST ENGINE
@@ -153,6 +155,10 @@ MUSCLES = [
 app = FastAPI(title='FAST')
 session_store = {}
 SESSION_DIR = tempfile.mkdtemp(prefix='fast_sessions_')
+
+@app.get('/demo.mp4')
+async def demo_video():
+    return FileResponse(os.path.join(_APP_DIR, 'demo.mp4'), media_type='video/mp4')
 
 def _save_session(sid, data):
     with open(os.path.join(SESSION_DIR, sid), 'wb') as f:
@@ -605,6 +611,7 @@ input[type=file]{display:none}
 .welcome{text-align:center;padding:24px 0}
 .welcome h1{font-size:28px;font-weight:800;letter-spacing:-.03em;margin-bottom:8px}
 .welcome p{font-size:14px;color:var(--text-dim);max-width:360px;margin:0 auto 24px;line-height:1.6}
+.demo-video{width:100%;display:block;border-radius:8px;border:1px solid var(--border);margin-bottom:14px;background:#000;aspect-ratio:800/950}
 
 /* Animations */
 @keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
@@ -892,7 +899,6 @@ input[type=file]{display:none}
     <h1>How are your muscles?</h1>
     <p>Upload an sEMG recording. FAST analyses each muscle for fatigue — giving you a clear green, amber, or red status.</p>
   </div>
-
   <div class="home-grid">
     <div class="home-left">
       <div class="card" id="gauge-card">
@@ -937,6 +943,7 @@ input[type=file]{display:none}
     <div class="home-right">
       <div class="card">
         <div class="card-header">HOW IT WORKS</div>
+        <video class="demo-video" src="/demo.mp4" autoplay muted loop playsinline preload="auto" aria-label="Short demo of how FAST works"></video>
         <div class="steps">
           <div class="step">
             <div class="step-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17v3a2 2 0 002 2h14a2 2 0 002-2v-3"/><path d="M12 3v13"/><path d="M7 8l5-5 5 5"/></svg></div>
