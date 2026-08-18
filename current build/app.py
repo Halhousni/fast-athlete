@@ -544,10 +544,11 @@ input[type=file]{display:none}
 .summary-card.amber .summary-num{color:var(--amber)}
 .summary-card.red .summary-num{color:var(--red)}
 
-.result-card{display:flex;align-items:center;gap:14px;padding:16px;border-bottom:1px solid var(--border)}
+.result-card{display:flex;align-items:center;gap:14px;padding:16px;border-bottom:1px solid var(--border);flex-wrap:wrap}
 .result-card:last-child{border-bottom:none}
-.result-score{font-size:28px;font-weight:800;letter-spacing:-.02em;min-width:50px;text-align:center}
-.result-badge{font-size:11px;font-weight:600;padding:4px 12px;border-radius:6px;text-transform:uppercase;letter-spacing:.04em;white-space:nowrap;border:1px solid transparent}
+.result-card .body-svg{flex-shrink:0}
+.result-score{font-size:28px;font-weight:800;letter-spacing:-.02em;min-width:50px;text-align:center;flex-shrink:0}
+.result-badge{font-size:11px;font-weight:600;padding:4px 12px;border-radius:6px;text-transform:uppercase;letter-spacing:.04em;white-space:nowrap;border:1px solid transparent;flex-shrink:0;margin-left:auto}
 .badge-green{background:rgba(0,230,118,0.1);color:var(--green);border-color:rgba(0,230,118,0.25)}
 .badge-amber{background:rgba(255,145,0,0.1);color:var(--amber);border-color:rgba(255,145,0,0.25)}
 .badge-red{background:rgba(239,68,68,0.1);color:var(--red);border-color:rgba(239,68,68,0.25)}
@@ -1247,7 +1248,7 @@ function showResults(selected) {
     const tip = r.tip||'';
     const cleanColor = color.replace('var(','').replace(')','');
     const svg = muscleThumbSVG(m.id||m.column, cleanColor);
-    listHTML += '<div class="result-card"><div class="body-svg">' + svg + '</div><div style="flex:1"><div class="muscle-name">' + (m.id||m.column) + ' - ' + m.name + '</div><div class="muscle-desc">' + m.desc + '</div><div class="result-tip">' + tip + '</div>' + (r.centroid != null ? '<div style="font-size:11px;color:#71717a;margin-top:3px">LOW centroid: ' + r.centroid + ' Hz (8–23 Hz)</div>' : '') + '</div><div class="result-score" style="color:' + color + '">' + score + '</div><span class="result-badge ' + badgeClass + '">' + badgeText + '</span></div>';
+    listHTML += '<div class="result-card"><div class="body-svg">' + svg + '</div><div style="flex:1 1 130px;min-width:0"><div class="muscle-name">' + (m.id||m.column) + ' - ' + m.name + '</div><div class="muscle-desc">' + m.desc + '</div><div class="result-tip">' + tip + '</div>' + (r.centroid != null ? '<div style="font-size:11px;color:#71717a;margin-top:3px">LOW centroid: ' + r.centroid + ' Hz (8–23 Hz)</div>' : '') + '</div><div class="result-score" style="color:' + color + '">' + score + '</div><span class="result-badge ' + badgeClass + '">' + badgeText + '</span></div>';
   });
   document.getElementById('results-list').innerHTML = listHTML;
 
