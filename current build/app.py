@@ -468,7 +468,8 @@ HTML_PAGE = '''<!DOCTYPE html>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 body{font-family:Inter,-apple-system,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;display:flex;flex-direction:column;-webkit-font-smoothing:antialiased}
-:root{--bg:#18181b;--cyan:#00E5FF;--green:#00E676;--amber:#FF9100;--red:#ef4444;--surface:#1c1c1f;--card:#27272a;--card-hover:#2f2f33;--text:#fafafa;--text-dim:#a1a1aa;--text-faint:#7d7d85;--border:rgba(255,255,255,0.1)}
+:root{--bg:#18181b;--cyan:#00E5FF;--green:#00E676;--amber:#FF9100;--red:#ef4444;--surface:#1c1c1f;--card:#27272a;--card-hover:#2f2f33;--text:#fafafa;--text-dim:#a1a1aa;--text-faint:#7d7d85;--border:rgba(255,255,255,0.1);--soft:rgba(255,255,255,0.06);--ring-track:rgba(255,255,255,0.1);--skeleton-base:#2b2b2f;--skeleton-shine:rgba(255,255,255,0.07)}
+:root[data-theme="light"]{--bg:#f4f4f5;--surface:#ffffff;--card:#ffffff;--card-hover:#eaeaec;--text:#18181b;--text-dim:#52525b;--text-faint:#8b8b93;--border:rgba(0,0,0,0.12);--soft:rgba(0,0,0,0.05);--ring-track:rgba(0,0,0,0.12);--skeleton-base:#e6e6e9;--skeleton-shine:rgba(255,255,255,0.75)}
 .app-container{width:100%;max-width:480px;margin:0 auto;padding:0 16px 80px;min-height:100vh}
 .hidden{display:none!important}
 
@@ -477,7 +478,7 @@ body{font-family:Inter,-apple-system,sans-serif;background:var(--bg);color:var(-
 .logo{display:flex;align-items:center;gap:10px}
 .logo-icon{width:36px;height:36px;background:linear-gradient(135deg,#00E5FF,#00B8D4);border-radius:10px;display:flex;align-items:center;justify-content:center}
 .logo-wave{width:18px;height:14px;background:linear-gradient(90deg,transparent 0%,#fff 50%,transparent 100%);clip-path:polygon(0 100%,10% 30%,25% 70%,40% 20%,55% 80%,70% 30%,85% 70%,100% 40%,100% 100%)}
-.logo-text{font-size:18px;font-weight:800;letter-spacing:-0.02em;color:#fff}
+.logo-text{font-size:18px;font-weight:800;letter-spacing:-0.02em;color:var(--text)}
 .logo-text span{color:var(--cyan)}
 .header-right{display:flex;align-items:center;gap:16px}
 .notif-btn{position:relative;background:none;border:none;color:var(--text-dim);cursor:pointer;font-size:20px;padding:4px}
@@ -495,7 +496,7 @@ body{font-family:Inter,-apple-system,sans-serif;background:var(--bg);color:var(-
 .btn-primary:disabled{opacity:.4;cursor:not-allowed;transform:none;box-shadow:none}
 .btn-outline{display:flex;align-items:center;gap:6px;padding:10px 20px;border:1px solid var(--border);border-radius:8px;background:transparent;color:var(--text-dim);font-family:Inter,sans-serif;font-size:13px;font-weight:500;cursor:pointer;transition:all .15s}
 .btn-outline:hover{border-color:var(--cyan);color:var(--cyan)}
-.btn-outline:active{background:rgba(255,255,255,0.04)}
+.btn-outline:active{background:var(--soft)}
 
 /* Cards */
 .card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:12px}
@@ -505,7 +506,7 @@ body{font-family:Inter,-apple-system,sans-serif;background:var(--bg);color:var(-
 .gauge-wrap{display:flex;flex-direction:column;align-items:center;padding:8px 0}
 .gauge-ring{position:relative;width:180px;height:180px}
 .gauge-ring svg{transform:rotate(-90deg);width:100%;height:100%}
-.gauge-ring .bg{fill:none;stroke:rgba(255,255,255,0.1);stroke-width:10}
+.gauge-ring .bg{fill:none;stroke:var(--ring-track);stroke-width:10}
 .gauge-ring .fill{fill:none;stroke:var(--green);stroke-width:10;stroke-linecap:round;transition:stroke-dashoffset 1s ease}
 .gauge-center{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center}
 .gauge-value{font-size:42px;font-weight:800;letter-spacing:-.03em;line-height:1}
@@ -587,7 +588,7 @@ input[type=file]{display:none}
 
 /* Muscle map (MuscleMapJS canvas widget) */
 .muscle-map{position:relative;display:flex;flex-direction:column;align-items:center;gap:12px;padding:12px 0}
-.mm-toggle{display:flex;gap:4px;background:rgba(255,255,255,0.05);border:1px solid var(--border);border-radius:999px;padding:3px}
+.mm-toggle{display:flex;gap:4px;background:var(--soft);border:1px solid var(--border);border-radius:999px;padding:3px}
 .mm-toggle-btn{background:transparent;border:none;color:var(--text-dim);font-family:Inter,sans-serif;font-size:11px;font-weight:700;letter-spacing:.08em;padding:6px 16px;border-radius:999px;cursor:pointer;transition:background .15s,color .15s}
 .mm-toggle-btn.active{background:var(--cyan);color:#06121a}
 .mm-canvas{width:min(280px,100%);height:460px}
@@ -637,7 +638,7 @@ input[type=file]{display:none}
 .home-left .card,.home-right .card{margin-bottom:0}
 .steps{display:flex;flex-direction:column;gap:14px}
 .step{display:flex;align-items:flex-start;gap:12px}
-.step-icon{width:36px;height:36px;border-radius:8px;background:rgba(255,255,255,0.05);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;color:var(--cyan);flex-shrink:0}
+.step-icon{width:36px;height:36px;border-radius:8px;background:var(--soft);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;color:var(--cyan);flex-shrink:0}
 .step-icon svg{width:18px;height:18px}
 .step-title{font-size:14px;font-weight:600;color:var(--text)}
 .step-desc{font-size:12px;color:var(--text-dim);margin-top:2px;line-height:1.5}
@@ -648,7 +649,7 @@ input[type=file]{display:none}
 .example-meta{font-size:12px;color:var(--text-dim);margin-top:2px}
 .example-score{font-size:24px;font-weight:800;color:var(--green)}
 .example-foot{font-size:12px;color:var(--text-dim);padding-top:10px;line-height:1.5}
-.tag{font-size:9px;font-weight:700;background:rgba(255,255,255,0.08);border:1px solid var(--border);color:var(--text-dim);padding:2px 6px;border-radius:6px;letter-spacing:.08em;vertical-align:2px;margin-left:6px}
+.tag{font-size:9px;font-weight:700;background:var(--soft);border:1px solid var(--border);color:var(--text-dim);padding:2px 6px;border-radius:6px;letter-spacing:.08em;vertical-align:2px;margin-left:6px}
 .tip-body{font-size:13px;color:var(--text-dim);line-height:1.6}
 
 @media(min-width:640px){
@@ -729,7 +730,7 @@ input[type=file]{display:none}
 .mm-loader:after{--s:-1}
 @keyframes fastSpin{100%{transform:rotate(calc(var(--s,1)*1turn))}}
 /* Indeterminate sweep bar (uiverse.io SteveBloX, wise-moose) */
-.progress-track{width:min(260px,80%);height:6px;margin:18px auto 0;background:rgba(255,255,255,0.08);border-radius:999px;overflow:hidden}
+.progress-track{width:min(260px,80%);height:6px;margin:18px auto 0;background:var(--soft);border-radius:999px;overflow:hidden}
 .progress-sweep{width:30%;height:100%;border-radius:999px;background:var(--cyan);animation:sweep 1.6s cubic-bezier(.4,1.01,1,1) infinite}
 @keyframes sweep{0%{transform:translateX(-100%)}100%{transform:translateX(340%)}}
 /* Infinity stroke loader (uiverse.io fanishah, quick-deer) */
@@ -738,7 +739,7 @@ input[type=file]{display:none}
 .idle-infinity .path{animation:infinityDraw 1.6s infinite cubic-bezier(.65,.05,.36,1)}
 @keyframes infinityDraw{to{stroke-dashoffset:10}}
 /* Skeleton shimmer (uiverse.io vk-uiux, neat-goat) */
-.skeleton{background-image:linear-gradient(90deg,#2b2b2f 0px,rgba(255,255,255,0.07) 40px,#2b2b2f 80px);background-size:300% 100%;background-position:100% 0;border-radius:8px;animation:shimmer 1.5s infinite}
+.skeleton{background-image:linear-gradient(90deg,var(--skeleton-base) 0px,var(--skeleton-shine) 40px,var(--skeleton-base) 80px);background-size:300% 100%;background-position:100% 0;border-radius:8px;animation:shimmer 1.5s infinite}
 @keyframes shimmer{to{background-position:-100% 0}}
 .skeleton-line{height:14px;margin-bottom:12px}
 .skeleton-line.short{width:45%}
@@ -750,7 +751,7 @@ input[type=file]{display:none}
 
 /* ═══ History upgrade ═══ */
 .filter-row{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 12px}
-.filter-chip{background:rgba(255,255,255,0.05);border:1px solid var(--border);color:var(--text-dim);font-family:Inter,sans-serif;font-size:11px;font-weight:700;letter-spacing:.05em;padding:6px 14px;border-radius:999px;cursor:pointer;transition:background .15s,color .15s,border-color .15s}
+.filter-chip{background:var(--soft);border:1px solid var(--border);color:var(--text-dim);font-family:Inter,sans-serif;font-size:11px;font-weight:700;letter-spacing:.05em;padding:6px 14px;border-radius:999px;cursor:pointer;transition:background .15s,color .15s,border-color .15s}
 .filter-chip:hover{color:var(--text)}
 .filter-chip.active{background:var(--cyan);border-color:var(--cyan);color:#06121a}
 .trend{width:100%;height:auto;display:block}
@@ -784,7 +785,7 @@ input[type=file]{display:none}
 .week-strip{display:flex;gap:4px}
 .week-day{flex:1;display:flex;flex-direction:column;align-items:center;gap:6px}
 .week-dot{width:14px;height:14px;border-radius:50%;box-shadow:0 0 6px rgba(0,0,0,0.3)}
-.week-dot.empty{background:rgba(255,255,255,0.07);border:1px dashed var(--border);box-shadow:none}
+.week-dot.empty{background:var(--soft);border:1px dashed var(--border);box-shadow:none}
 .week-label{font-size:9px;color:var(--text-faint);font-weight:600;text-transform:uppercase;letter-spacing:.04em}
 
 /* ═══ Profile tab ═══ */
@@ -793,7 +794,16 @@ input[type=file]{display:none}
 .profile-del{background:none;border:none;color:var(--text-faint);cursor:pointer;padding:6px;flex-shrink:0;transition:color .15s}
 .profile-del:hover{color:var(--red)}
 .profile-del svg{width:16px;height:16px;display:block}
+
+/* ═══ Theme toggle ═══ */
+.theme-btn{background:none;border:none;color:var(--text-dim);cursor:pointer;padding:4px;display:flex;align-items:center}
+.theme-btn svg{display:block}
+.theme-btn .theme-icon-sun{display:block}
+.theme-btn .theme-icon-moon{display:none}
+:root[data-theme="light"] .theme-btn .theme-icon-sun{display:none}
+:root[data-theme="light"] .theme-btn .theme-icon-moon{display:block}
 </style>
+<script>try{if(localStorage.getItem('fast_theme')==='light')document.documentElement.dataset.theme='light'}catch(e){}</script>
 </head>
 <body>
 <div class="app-container">
@@ -840,6 +850,10 @@ input[type=file]{display:none}
     <div class="logo-text">FAST <span>ATHLETE</span></div>
   </div>
   <div class="header-right">
+    <button class="theme-btn" id="theme-btn" onclick="toggleTheme()" aria-label="Switch between dark and light theme">
+      <svg class="theme-icon-sun" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+      <svg class="theme-icon-moon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg>
+    </button>
     <button class="notif-btn" id="notif-btn" onclick="openNotifications()" aria-label="Notifications">
       <svg width="22" height="22" viewBox="0 0 448 512" fill="currentColor"><path d="M224 0c-17.7 0-32 14.3-32 32V49.9C119.5 61.4 64 124.2 64 200v33.4c0 45.4-15.5 89.5-43.8 124.9L5.3 377c-5.8 7.2-6.9 17.1-2.9 25.4S14.8 416 24 416H424c9.2 0 17.6-5.3 21.6-13.6s2.9-18.2-2.9-25.4l-14.9-18.6C399.5 322.9 384 278.8 384 233.4V200c0-75.8-55.5-138.6-128-150.1V32c0-17.7-14.3-32-32-32zm0 96h8c57.4 0 104 46.6 104 104v33.4c0 47.9 13.9 94.6 39.7 134.6H72.3C98.1 328 112 281.3 112 233.4V200c0-57.4 46.6-104 104-104h8zm64 352H224 160c0 17 6.7 33.3 18.7 45.3s28.3 18.7 45.3 18.7 33.3-6.7 45.3-18.7s18.7-28.3 18.7-45.3z"/></svg>
       <span class="notif-badge hidden" id="notif-badge">0</span>
@@ -1404,6 +1418,10 @@ const MM_MUSCLE_MAP = {
   'ECR': 'forearm', 'FDI': 'hands', 'FDS': 'forearm'
 };
 const MM_FRONT_MUSCLES = ['VL','VM','RF','TA','MD','BB','BR','FCR','ECR','FDI','FDS'];
+function mmThemeColors() {
+  const light = document.documentElement.dataset.theme === 'light';
+  return { stroke: light ? 'rgba(0,0,0,0.18)' : 'rgba(255,255,255,0.12)', noData: light ? 'rgba(0,0,0,0.07)' : 'rgba(255,255,255,0.10)' };
+}
 const MM_FRIENDLY = {
   'outer-quad':'Vastus Lateralis (VL)',
   'inner-quad':'Vastus Medialis (VM)',
@@ -1444,7 +1462,7 @@ function ensureMMWidget(containerId, withLegend) {
   const w = wm[containerId] = new MuscleMapJS.MuscleMapWidget(wrap, { gender:'male', side:'front', interactive:true, multiSelect:false, showSubGroups:true });
   w.setStyle({
     defaultFillColor:'#27272a',
-    strokeColor:'rgba(255,255,255,0.12)',
+    strokeColor:mmThemeColors().stroke,
     strokeWidth:1,
     selectionColor:'#00E5FF',
     selectionStrokeColor:'#00E5FF',
@@ -1508,7 +1526,7 @@ function buildMuscleMap(selected) {
   w.clearHighlights();
   for (const slug in slugState) {
     const st = slugState[slug];
-    if (!st.hasScore) { w.highlightSide(slug, 'right', 'rgba(255,255,255,0.10)', 0.9); continue; }
+    if (!st.hasScore) { w.highlightSide(slug, 'right', mmThemeColors().noData, 0.9); continue; }
     w.highlightSide(slug, 'right', 'rgb(' + heatColor(st.minScore) + ')', 0.9);
   }
 }
@@ -2008,6 +2026,20 @@ async function loadTrain() {
   if (stale) actions += '<button class="btn-primary" style="margin-bottom:10px" onclick="startNewAssessment()">Start New Assessment</button>';
   if (lastResults && lastResults.length) actions += '<button class="btn-outline" style="width:100%;justify-content:center" onclick="goResults()">View Full Results</button>';
   actBox.innerHTML = actions;
+}
+
+// ═══ THEME TOGGLE ═══
+function toggleTheme() {
+  const light = document.documentElement.dataset.theme === 'light';
+  if (light) delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = 'light';
+  try { localStorage.setItem('fast_theme', light ? 'dark' : 'light'); } catch(e) {}
+  rethemeMuscleMaps();
+}
+function rethemeMuscleMaps() {
+  const wm = window.__mmWidgets || {};
+  Object.keys(wm).forEach(id => { try { wm[id].destroy(); } catch(e) {} delete wm[id]; });
+  if (document.querySelectorAll('#muscle-grid .muscle-card').length > 0) updateSelectionMap();
+  if (lastResults) buildMuscleMap(lastResults);
 }
 
 // ═══ TOAST ═══
