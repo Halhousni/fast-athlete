@@ -282,7 +282,7 @@ async def history(profile_id: int):
     conn = _db()
     rows = conn.execute(
         'SELECT id, ts, avg_score, status, detail FROM results '
-        'WHERE profile_id=? ORDER BY ts DESC LIMIT 50', (profile_id,)).fetchall()
+        'WHERE profile_id=? ORDER BY ts DESC, id DESC LIMIT 50', (profile_id,)).fetchall()
     conn.close()
     out = []
     for r in rows:
@@ -749,6 +749,25 @@ input[type=file]{display:none}
 .hdetail-row:last-child{border-bottom:none}
 .hdetail-name{flex:1;min-width:0;font-size:13px;font-weight:500;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .hdetail-score{font-size:15px;font-weight:700;min-width:30px;text-align:right}
+
+/* ═══ Train tab ═══ */
+@keyframes fadeUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+.fade-up{animation:fadeUp .45s ease}
+#train-hero{margin-top:16px}
+.train-hero{display:flex;align-items:center;gap:14px}
+.train-gauge{position:relative;width:104px;height:104px;flex-shrink:0}
+.train-gauge-val{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:800;letter-spacing:-.02em}
+.train-hero-text{flex:1;min-width:0}
+.train-verdict{font-size:18px;font-weight:800;letter-spacing:-.02em}
+.train-sub{font-size:12px;color:var(--text-dim);margin-top:4px;line-height:1.5}
+.train-date{font-size:10px;color:var(--text-faint);margin-top:6px;text-transform:uppercase;letter-spacing:.06em}
+.train-icon{width:44px;height:44px;border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.train-icon svg{width:22px;height:22px}
+.week-strip{display:flex;gap:4px}
+.week-day{flex:1;display:flex;flex-direction:column;align-items:center;gap:6px}
+.week-dot{width:14px;height:14px;border-radius:50%;box-shadow:0 0 6px rgba(0,0,0,0.3)}
+.week-dot.empty{background:rgba(255,255,255,0.07);border:1px dashed var(--border);box-shadow:none}
+.week-label{font-size:9px;color:var(--text-faint);font-weight:600;text-transform:uppercase;letter-spacing:.04em}
 </style>
 </head>
 <body>
@@ -1048,6 +1067,14 @@ input[type=file]{display:none}
   <div id="history-list"></div>
 </div>
 
+<!-- ═══ SCREEN 6: TRAIN ═══ -->
+<div class="section" id="screen-train">
+  <div id="train-hero"></div>
+  <div id="train-rest"></div>
+  <div id="train-week"></div>
+  <div id="train-actions"></div>
+</div>
+
 <!-- ═══ BOTTOM NAV ═══ -->
 <nav class="bottom-nav" id="bottom-nav">
   <button class="nav-item active" data-screen="welcome" onclick="navTo('welcome')">
@@ -1062,11 +1089,11 @@ input[type=file]{display:none}
     <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zM9 17H7v-7h2v7zm4 0h-2V7h2v10zm4 0h-2v-4h2v4z"/></svg>
     <span class="nav-label">History</span>
   </button>
-  <button class="nav-item" data-screen="results" onclick="navTo('results')">
-    <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+  <button class="nav-item" data-screen="train" onclick="navTo('train')">
+    <svg viewBox="0 0 24 24" fill="currentColor"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg>
     <span class="nav-label">Train</span>
   </button>
-  <button class="nav-item" data-screen="results" onclick="navTo('results')">
+  <button class="nav-item" data-screen="profile" onclick="openProfileSheet()">
     <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>
     <span class="nav-label">Profile</span>
   </button>
@@ -1103,6 +1130,7 @@ function navTo(screen) {
   if (navBtn) navBtn.classList.add('active');
   currentScreen = screen;
   if (screen === 'history') loadHistory();
+  if (screen === 'train') loadTrain();
 }
 
 function startNewAssessment() {
@@ -1773,6 +1801,120 @@ async function updateResultsTrend() {
       label: new Date(x.ts).toLocaleDateString('en-US', {month: 'short', day: 'numeric'})
     })));
   } catch(e) {}
+}
+
+// ═══ TRAIN ═══
+function goResults() { navTo('results'); }
+
+async function loadTrain() {
+  const heroBox = document.getElementById('train-hero');
+  const restBox = document.getElementById('train-rest');
+  const weekBox = document.getElementById('train-week');
+  const actBox = document.getElementById('train-actions');
+  if (!heroBox) return;
+
+  let latest = null;
+  let history = [];
+  if (profile) {
+    try {
+      const resp = await fetch('/api/history?profile_id=' + profile.id);
+      const data = await resp.json();
+      history = data.history || [];
+      latest = history[0] || null;
+    } catch(e) {}
+  }
+  if (!latest && lastResults && lastResults.length) {
+    const scores = lastResults.map(m => (m.result || {}).score).filter(s => s != null);
+    const avg = scores.length ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : 0;
+    latest = {
+      avg_score: avg,
+      status: avg >= 70 ? 'RECOVERED' : avg >= 40 ? 'SOME FATIGUE' : 'FATIGUED',
+      ts: new Date().toISOString(),
+      results: lastResults.map(m => ({id: m.id || m.column, name: m.name, status: (m.result || {}).status, score: (m.result || {}).score}))
+    };
+  }
+
+  if (!latest) {
+    heroBox.innerHTML = '<div class="card empty-state fade-up"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z"/></svg>No assessment yet — check your fatigue first, then come back for your training call.</div>';
+    restBox.innerHTML = '';
+    weekBox.innerHTML = '';
+    actBox.innerHTML = '<button class="btn-primary" onclick="startNewAssessment()">Start New Assessment</button>';
+    return;
+  }
+
+  const score = latest.avg_score != null ? Math.round(latest.avg_score) : 0;
+  let verdict, vcolor, vbg, icon, sub;
+  if (score >= 70) {
+    verdict = 'READY TO TRAIN'; vcolor = 'var(--green)'; vbg = 'rgba(0,230,118,0.12)';
+    icon = '<path d="M9 12l2 2 4-4"/>';
+    sub = 'Full session — your muscles have recovered.';
+  } else if (score >= 40) {
+    verdict = 'LIGHT DAY'; vcolor = 'var(--amber)'; vbg = 'rgba(255,145,0,0.12)';
+    icon = '<path d="M12 9v4"/><circle cx="12" cy="17" r="1"/>';
+    sub = 'Early fatigue signs — cut the volume, keep it easy.';
+  } else {
+    verdict = 'REST DAY'; vcolor = 'var(--red)'; vbg = 'rgba(239,68,68,0.12)';
+    icon = '<path d="M21 12.8A9 9 0 1111.2 3 7 7 0 0021 12.8z"/>';
+    sub = 'Give your muscles time — heavy work can wait.';
+  }
+
+  const circ = 2 * Math.PI * 44;
+  const off = circ * (1 - score / 100);
+  const dateStr = latest.ts ? new Date(latest.ts).toLocaleDateString('en-US', {month: 'short', day: 'numeric'}) : '';
+  heroBox.innerHTML = '<div class="card fade-up"><div class="card-header">' + "TODAY'S CALL" + '</div>' +
+    '<div class="train-hero">' +
+    '<div class="train-gauge"><svg width="104" height="104" viewBox="0 0 104 104">' +
+    '<circle cx="52" cy="52" r="44" fill="none" stroke="rgba(255,255,255,0.1)" stroke-width="8"/>' +
+    '<circle cx="52" cy="52" r="44" fill="none" stroke="' + vcolor + '" stroke-width="8" stroke-linecap="round" stroke-dasharray="' + circ.toFixed(1) + '" stroke-dashoffset="' + off.toFixed(1) + '" transform="rotate(-90 52 52)"/>' +
+    '</svg><div class="train-gauge-val" style="color:' + vcolor + '">' + score + '%</div></div>' +
+    '<div class="train-hero-text"><div class="train-verdict" style="color:' + vcolor + '">' + verdict + '</div>' +
+    '<div class="train-sub">' + sub + '</div>' +
+    '<div class="train-date">' + (dateStr ? 'Latest: ' + dateStr : 'This session') + '</div></div>' +
+    '<div class="train-icon" style="background:' + vbg + ';color:' + vcolor + '"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' + icon + '</svg></div>' +
+    '</div></div>';
+
+  const results = latest.results || [];
+  const redM = results.filter(r => r.status === 'red');
+  const amberM = results.filter(r => r.status === 'amber');
+  if (results.length) {
+    let rows = '';
+    const rowFor = (r, c, tag) => '<div class="hdetail-row"><span class="tl-dot" style="background:' + c + '"></span><span class="hdetail-name">' + (r.id || '') + ' - ' + (r.name || '') + '</span><span class="hdetail-score" style="color:' + c + ';font-size:11px;font-weight:600">' + tag + '</span></div>';
+    if (redM.length) {
+      rows = redM.map(r => rowFor(r, 'var(--red)', 'NEEDS REST')).join('');
+      rows += amberM.map(r => rowFor(r, 'var(--amber)', 'GO EASY')).join('');
+    } else if (amberM.length) {
+      rows = amberM.map(r => rowFor(r, 'var(--amber)', 'GO EASY')).join('');
+    } else {
+      rows = rowFor({id: '', name: 'ALL CLEAR'}, 'var(--green)', 'TRAIN AS PLANNED');
+    }
+    restBox.innerHTML = '<div class="card"><div class="card-header">MUSCLES TO WATCH</div>' + rows + '</div>';
+  } else {
+    restBox.innerHTML = '';
+  }
+
+  const days = [];
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(Date.now() - i * 864e5);
+    const key = d.toDateString();
+    const hit = history.find(h => new Date(h.ts).toDateString() === key);
+    days.push({d, hit});
+  }
+  const cells = days.map(day => {
+    const label = day.d.toLocaleDateString('en-US', {weekday: 'short'}).slice(0, 2).toUpperCase();
+    if (day.hit) {
+      const sc = statusClassOf(day.hit.status);
+      const c = sc === 'green' ? 'var(--green)' : sc === 'amber' ? 'var(--amber)' : 'var(--red)';
+      return '<div class="week-day"><span class="week-dot" style="background:' + c + '"></span><span class="week-label">' + label + '</span></div>';
+    }
+    return '<div class="week-day"><span class="week-dot empty"></span><span class="week-label">' + label + '</span></div>';
+  }).join('');
+  weekBox.innerHTML = '<div class="card"><div class="card-header">LAST 7 DAYS</div><div class="week-strip">' + cells + '</div></div>';
+
+  const stale = !latest.ts || (Date.now() - new Date(latest.ts).getTime()) > 3 * 864e5;
+  let actions = '';
+  if (stale) actions += '<button class="btn-primary" style="margin-bottom:10px" onclick="startNewAssessment()">Start New Assessment</button>';
+  if (lastResults && lastResults.length) actions += '<button class="btn-outline" style="width:100%;justify-content:center" onclick="goResults()">View Full Results</button>';
+  actBox.innerHTML = actions;
 }
 
 // ═══ TOAST ═══
