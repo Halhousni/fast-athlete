@@ -451,7 +451,7 @@ HTML_PAGE = '''<!DOCTYPE html>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 body{font-family:Inter,-apple-system,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;display:flex;flex-direction:column;-webkit-font-smoothing:antialiased}
-:root{--bg:#18181b;--cyan:#00E5FF;--green:#00E676;--amber:#FF9100;--red:#ef4444;--surface:#1c1c1f;--card:#27272a;--card-hover:#2f2f33;--text:#fafafa;--text-dim:#a1a1aa;--text-faint:#71717a;--border:rgba(255,255,255,0.1)}
+:root{--bg:#18181b;--cyan:#00E5FF;--green:#00E676;--amber:#FF9100;--red:#ef4444;--surface:#1c1c1f;--card:#27272a;--card-hover:#2f2f33;--text:#fafafa;--text-dim:#a1a1aa;--text-faint:#7d7d85;--border:rgba(255,255,255,0.1)}
 .app-container{width:100%;max-width:480px;margin:0 auto;padding:0 16px 80px;min-height:100vh}
 .hidden{display:none!important}
 
@@ -465,6 +465,9 @@ body{font-family:Inter,-apple-system,sans-serif;background:var(--bg);color:var(-
 .header-right{display:flex;align-items:center;gap:16px}
 .notif-btn{position:relative;background:none;border:none;color:var(--text-dim);cursor:pointer;font-size:20px;padding:4px}
 .notif-badge{position:absolute;top:-2px;right:-4px;width:16px;height:16px;border-radius:50%;background:var(--red);color:#fff;font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center}
+.notif-btn svg{display:block}
+.notif-btn:hover svg,.notif-btn:active svg{animation:bellRing .9s both}
+@keyframes bellRing{0%,100%{transform-origin:top}15%{transform:rotateZ(10deg)}30%{transform:rotateZ(-10deg)}45%{transform:rotateZ(6deg)}60%{transform:rotateZ(-6deg)}75%{transform:rotateZ(2deg)}}
 .avatar{width:32px;height:32px;border-radius:50%;background:linear-gradient(135deg,#00E5FF,#00B8D4);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#fff;cursor:pointer}
 
 /* Buttons */
@@ -479,7 +482,7 @@ body{font-family:Inter,-apple-system,sans-serif;background:var(--bg);color:var(-
 
 /* Cards */
 .card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:12px}
-.card-header{font-size:12px;font-weight:600;color:var(--text-dim);text-transform:uppercase;letter-spacing:.06em;margin-bottom:16px}
+.card-header{font-size:12px;font-weight:600;color:var(--text-dim);text-transform:uppercase;letter-spacing:.08em;margin-bottom:16px}
 
 /* Gauge */
 .gauge-wrap{display:flex;flex-direction:column;align-items:center;padding:8px 0}
@@ -562,10 +565,6 @@ input[type=file]{display:none}
 
 /* Progress */
 .progress-section{text-align:center;padding:40px 20px}
-.progress-ring{position:relative;width:80px;height:80px;margin:0 auto 20px}
-.progress-ring svg{transform:rotate(-90deg)}
-.progress-ring .bg{fill:none;stroke:rgba(255,255,255,0.1);stroke-width:6}
-.progress-ring .fill{fill:none;stroke:var(--cyan);stroke-width:6;stroke-linecap:round;transition:stroke-dashoffset .3s ease}
 .progress-label{font-size:16px;font-weight:600;color:var(--text)}
 .progress-step{font-size:13px;color:var(--text-dim);margin-top:4px}
 
@@ -704,6 +703,32 @@ input[type=file]{display:none}
 .hist-chips{display:flex;flex-wrap:wrap;gap:6px}
 .hist-chip{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:600;color:var(--text-dim);background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:4px 10px}
 .hist-chip .tl-dot{width:8px;height:8px;box-shadow:none}
+
+/* ═══ Uiverse-inspired: double-ring loader, sweep bar, skeleton, empty state ═══ */
+/* Double-ring loader (uiverse.io doniaskima, sharp-sheep) */
+.mm-loader{width:64px;height:32px;display:grid;margin:0 auto 18px;--c:#0000 calc(100% - 5px),#00E5FF calc(100% - 4px) 96%,#0000;background:radial-gradient(farthest-side at bottom,var(--c)) 0 0,radial-gradient(farthest-side at top,var(--c)) 100% 100%;background-size:calc(50% + 2px) 50%;background-repeat:no-repeat;animation:fastSpin 1.5s infinite linear}
+.mm-loader:before,.mm-loader:after{content:"";grid-area:1/1;background:inherit;animation:inherit;animation-duration:2s}
+.mm-loader:after{--s:-1}
+@keyframes fastSpin{100%{transform:rotate(calc(var(--s,1)*1turn))}}
+/* Indeterminate sweep bar (uiverse.io SteveBloX, wise-moose) */
+.progress-track{width:min(260px,80%);height:6px;margin:18px auto 0;background:rgba(255,255,255,0.08);border-radius:999px;overflow:hidden}
+.progress-sweep{width:30%;height:100%;border-radius:999px;background:var(--cyan);animation:sweep 1.6s cubic-bezier(.4,1.01,1,1) infinite}
+@keyframes sweep{0%{transform:translateX(-100%)}100%{transform:translateX(340%)}}
+/* Infinity stroke loader (uiverse.io fanishah, quick-deer) */
+.gauge-idle{display:flex;align-items:center;justify-content:center}
+.idle-infinity{width:56px;height:56px}
+.idle-infinity .path{animation:infinityDraw 1.6s infinite cubic-bezier(.65,.05,.36,1)}
+@keyframes infinityDraw{to{stroke-dashoffset:10}}
+/* Skeleton shimmer (uiverse.io vk-uiux, neat-goat) */
+.skeleton{background-image:linear-gradient(90deg,#2b2b2f 0px,rgba(255,255,255,0.07) 40px,#2b2b2f 80px);background-size:300% 100%;background-position:100% 0;border-radius:8px;animation:shimmer 1.5s infinite}
+@keyframes shimmer{to{background-position:-100% 0}}
+.skeleton-line{height:14px;margin-bottom:12px}
+.skeleton-line.short{width:45%}
+.skeleton-chips{display:flex;gap:6px}
+.skeleton-chip{width:52px;height:20px;border-radius:8px}
+/* Empty state */
+.empty-state{text-align:center;color:var(--text-dim);font-size:13px;padding:36px 20px;line-height:1.7}
+.empty-state svg{width:34px;height:34px;color:var(--text-faint);margin-bottom:10px;opacity:.7}
 </style>
 </head>
 <body>
@@ -751,6 +776,10 @@ input[type=file]{display:none}
     <div class="logo-text">FAST <span>ATHLETE</span></div>
   </div>
   <div class="header-right">
+    <button class="notif-btn" id="notif-btn" onclick="openNotifications()" aria-label="Notifications">
+      <svg width="22" height="22" viewBox="0 0 448 512" fill="currentColor"><path d="M224 0c-17.7 0-32 14.3-32 32V49.9C119.5 61.4 64 124.2 64 200v33.4c0 45.4-15.5 89.5-43.8 124.9L5.3 377c-5.8 7.2-6.9 17.1-2.9 25.4S14.8 416 24 416H424c9.2 0 17.6-5.3 21.6-13.6s2.9-18.2-2.9-25.4l-14.9-18.6C399.5 322.9 384 278.8 384 233.4V200c0-75.8-55.5-138.6-128-150.1V32c0-17.7-14.3-32-32-32zm0 96h8c57.4 0 104 46.6 104 104v33.4c0 47.9 13.9 94.6 39.7 134.6H72.3C98.1 328 112 281.3 112 233.4V200c0-57.4 46.6-104 104-104h8zm64 352H224 160c0 17 6.7 33.3 18.7 45.3s28.3 18.7 45.3 18.7 33.3-6.7 45.3-18.7s18.7-28.3 18.7-45.3z"/></svg>
+      <span class="notif-badge hidden" id="notif-badge">0</span>
+    </button>
     <button class="profile-chip" id="profile-chip" onclick="openProfileSheet()">
       <span class="profile-avatar" id="profile-avatar">G</span>
       <span class="profile-name" id="profile-name">Guest</span>
@@ -796,7 +825,7 @@ input[type=file]{display:none}
 
   <div class="home-grid">
     <div class="home-left">
-      <div class="card" id="gauge-card" style="display:none">
+      <div class="card" id="gauge-card">
         <div class="card-header">FATIGUE ASSESSMENT</div>
         <div class="gauge-wrap">
           <div class="gauge-ring">
@@ -806,7 +835,8 @@ input[type=file]{display:none}
                 stroke-dasharray="490" stroke-dashoffset="490"/>
             </svg>
             <div class="gauge-center">
-              <div class="gauge-value" id="gauge-value" style="color:var(--green)">--</div>
+              <div class="gauge-value" id="gauge-value" style="color:var(--green);display:none">--</div>
+              <div class="gauge-idle" id="gauge-idle"><svg class="idle-infinity" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path class="path" stroke="#00E5FF" stroke-width="1.5" d="M9.743 10.25c3.213 1.96 5.017 4.676 7.248 4.676 2.588 0 2.791-4.8.518-5.668-3.107-1.187-5.178 3.719-8.284 5.03-1.415.677-3.41 1.014-4.09-1.14-.251-.797-.13-1.65.133-2.442v0c.425-1.278 2.132-1.66 3.35-1.081.304.144.668.346 1.125.625z" stroke-dashoffset="100" stroke-dasharray="100"/></svg></div>
               <div class="gauge-label">recovery</div>
               <div class="gauge-status"><span class="gauge-dot" id="gauge-dot" style="background:var(--green)"></span><span id="gauge-status-label">Optimal</span></div>
             </div>
@@ -915,15 +945,10 @@ input[type=file]{display:none}
 <!-- ═══ SCREEN 3: PROGRESS ═══ -->
 <div class="section" id="screen-progress">
   <div class="progress-section">
-    <div class="progress-ring">
-      <svg width="80" height="80" viewBox="0 0 80 80">
-        <circle class="bg" cx="40" cy="40" r="34"/>
-        <circle class="fill" id="prog-fill" cx="40" cy="40" r="34"
-          stroke-dasharray="213.6" stroke-dashoffset="213.6"/>
-      </svg>
-    </div>
+    <div class="mm-loader"></div>
     <div class="progress-label" id="prog-label">Running FAST analysis…</div>
     <div class="progress-step" id="prog-step"></div>
+    <div class="progress-track"><div class="progress-sweep"></div></div>
   </div>
 </div>
 
@@ -1048,6 +1073,9 @@ function navTo(screen) {
 
 function startNewAssessment() {
   navTo('upload');
+  document.getElementById('notif-badge').classList.add('hidden');
+  document.getElementById('gauge-value').style.display = 'none';
+  document.getElementById('gauge-idle').style.display = 'flex';
   document.getElementById('upload-zone').classList.remove('has-file');
   document.getElementById('upload-main-text').textContent = 'Drop your sEMG recording here';
   document.getElementById('file-info-section').classList.add('hidden');
@@ -1057,6 +1085,12 @@ function startNewAssessment() {
 }
 
 // ═══ UPLOAD ═══
+function openNotifications() {
+  const n = lastResults ? lastResults.filter(m => (m.result||{}).status === 'red').length : 0;
+  if (n > 0) navTo('results');
+  else toast('No alerts yet — complete an assessment to see them.');
+}
+
 const uploadZone = document.getElementById('upload-zone');
 const fileInput = document.getElementById('file-input');
 
@@ -1154,14 +1188,6 @@ async function runAnalysis() {
   navTo('progress');
   document.getElementById('prog-label').textContent = 'Running FAST analysis...';
   document.getElementById('prog-step').textContent = selected.length + ' muscle' + (selected.length>1?'s':'') + ' selected';
-  document.getElementById('prog-fill').style.strokeDashoffset = '213.6';
-
-  let progress = 0;
-  const interval = setInterval(() => {
-    progress = Math.min(progress + 3, 90);
-    const offset = 213.6 - (213.6 * progress / 100);
-    document.getElementById('prog-fill').style.strokeDashoffset = offset;
-  }, 100);
 
   try {
     const resp = await fetch('/api/analyze', {
@@ -1172,8 +1198,6 @@ async function runAnalysis() {
     const text = await resp.text();
     let data;
     try { data = JSON.parse(text); } catch(e) { data = {error:'Server error',results:{}}; }
-    clearInterval(interval);
-    document.getElementById('prog-fill').style.strokeDashoffset = '0';
 
     if (data.error && Object.keys(data.results||{}).length === 0) {
       document.getElementById('prog-label').textContent = 'Error: ' + data.error;
@@ -1187,7 +1211,6 @@ async function runAnalysis() {
     showResults(selected);
     navTo('results');
   } catch(e) {
-    clearInterval(interval);
     for (const m of selected) m.result = {status:'grey',score:0,tip:e.message};
     lastResults = selected;
     showResults(selected);
@@ -1231,6 +1254,11 @@ function showResults(selected) {
   document.getElementById('count-amber').textContent = amber;
   document.getElementById('count-red').textContent = red;
 
+  const redCount = selected.filter(m => (m.result||{}).status === 'red').length;
+  const notifBadge = document.getElementById('notif-badge');
+  notifBadge.textContent = redCount;
+  notifBadge.classList.toggle('hidden', redCount === 0);
+
   buildMuscleMap(selected);
 
   let listHTML = '';
@@ -1248,7 +1276,7 @@ function showResults(selected) {
     const tip = r.tip||'';
     const cleanColor = color.replace('var(','').replace(')','');
     const svg = muscleThumbSVG(m.id||m.column, cleanColor);
-    listHTML += '<div class="result-card"><div class="body-svg">' + svg + '</div><div style="flex:1 1 130px;min-width:0"><div class="muscle-name">' + (m.id||m.column) + ' - ' + m.name + '</div><div class="muscle-desc">' + m.desc + '</div><div class="result-tip">' + tip + '</div>' + (r.centroid != null ? '<div style="font-size:11px;color:#71717a;margin-top:3px">LOW centroid: ' + r.centroid + ' Hz (8–23 Hz)</div>' : '') + '</div><div class="result-score" style="color:' + color + '">' + score + '</div><span class="result-badge ' + badgeClass + '">' + badgeText + '</span></div>';
+    listHTML += '<div class="result-card"><div class="body-svg">' + svg + '</div><div style="flex:1 1 130px;min-width:0"><div class="muscle-name">' + (m.id||m.column) + ' - ' + m.name + '</div><div class="muscle-desc">' + m.desc + '</div><div class="result-tip">' + tip + '</div>' + (r.centroid != null ? '<div style="font-size:11px;color:#7d7d85;margin-top:3px">LOW centroid: ' + r.centroid + ' Hz (8–23 Hz)</div>' : '') + '</div><div class="result-score" style="color:' + color + '">' + score + '</div><span class="result-badge ' + badgeClass + '">' + badgeText + '</span></div>';
   });
   document.getElementById('results-list').innerHTML = listHTML;
 
@@ -1257,6 +1285,8 @@ function showResults(selected) {
   document.getElementById('gauge-fill').setAttribute('stroke-dashoffset', gaugeOffset);
   document.getElementById('gauge-value').textContent = avgScore + '%';
   document.getElementById('gauge-value').style.color = gaugeColor;
+  document.getElementById('gauge-value').style.display = 'block';
+  document.getElementById('gauge-idle').style.display = 'none';
   document.getElementById('gauge-dot').style.background = gaugeColor;
   document.getElementById('gauge-status-label').textContent = avgScore >= 70 ? 'Optimal' : avgScore >= 40 ? 'Moderate' : 'Needs rest';
   document.getElementById('gauge-card').style.display = 'block';
@@ -1528,16 +1558,17 @@ async function saveAssessment(avgScore, overallStatus) {
 async function loadHistory() {
   const list = document.getElementById('history-list');
   if (!profile) {
-    list.innerHTML = '<div class="card" style="text-align:center;color:var(--text-dim);font-size:13px;padding:32px 20px">Pick a profile to see saved assessments.</div>';
+    list.innerHTML = '<div class="card empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="7" r="4"/><path d="M5 21v-1a7 7 0 0114 0v1"/></svg>Pick a profile to see saved assessments.</div>';
     return;
   }
-  list.innerHTML = '<div class="progress-step">Loading…</div>';
+  list.innerHTML = '<div class="card skeleton-card"><div class="skeleton skeleton-line"></div><div class="skeleton skeleton-line short"></div><div class="skeleton-chips"><div class="skeleton skeleton-chip"></div><div class="skeleton skeleton-chip"></div><div class="skeleton skeleton-chip"></div></div></div>' +
+    '<div class="card skeleton-card"><div class="skeleton skeleton-line"></div><div class="skeleton skeleton-line short"></div><div class="skeleton-chips"><div class="skeleton skeleton-chip"></div><div class="skeleton skeleton-chip"></div></div></div>';
   try {
     const resp = await fetch('/api/history?profile_id=' + profile.id);
     const data = await resp.json();
     const h = data.history || [];
     if (!h.length) {
-      list.innerHTML = '<div class="card" style="text-align:center;color:var(--text-dim);font-size:13px;padding:32px 20px">No saved assessments yet for <b>' + profile.name + '</b>.</div>';
+      list.innerHTML = '<div class="card empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8v4l3 3"/><circle cx="12" cy="12" r="9"/></svg>No saved assessments yet for <b>' + profile.name + '</b>.</div>';
       return;
     }
     list.innerHTML = '';
@@ -1563,7 +1594,7 @@ async function loadHistory() {
         '<div class="hist-chips">' + chips + '</div></div>';
     });
   } catch(e) {
-    list.innerHTML = '<div class="card" style="text-align:center;color:var(--text-dim)">Could not load history.</div>';
+    list.innerHTML = '<div class="card empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l3 3"/></svg>Could not load history.</div>';
   }
 }
 
