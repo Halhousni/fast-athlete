@@ -160,6 +160,11 @@ SESSION_DIR = tempfile.mkdtemp(prefix='fast_sessions_')
 async def demo_video():
     return FileResponse(os.path.join(_APP_DIR, 'demo.mp4'), media_type='video/mp4')
 
+@app.get('/demo_recording.csv')
+async def demo_recording_csv():
+    return FileResponse(os.path.join(_APP_DIR, 'demo_recording.csv'),
+                        media_type='text/csv', filename='demo_recording.csv')
+
 def _save_session(sid, data):
     with open(os.path.join(SESSION_DIR, sid), 'wb') as f:
         pickle.dump(data, f)
@@ -534,6 +539,8 @@ body{font-family:Inter,-apple-system,sans-serif;background:var(--bg);color:var(-
 .upload-text{font-size:15px;font-weight:500;color:var(--text)}
 .upload-formats{font-size:12px;color:var(--text-faint);margin-top:6px}
 input[type=file]{display:none}
+.demo-row{display:flex;align-items:center;justify-content:center;gap:10px;margin:0 0 14px;flex-wrap:wrap}
+.demo-hint{font-size:12px;color:var(--text-faint)}
 
 /* File chip */
 .file-chip{display:inline-flex;align-items:center;gap:8px;padding:8px 14px;border-radius:8px;background:rgba(0,230,118,0.08);color:var(--green);font-size:13px;font-weight:600}
@@ -1010,6 +1017,11 @@ input[type=file]{display:none}
     <input type="file" id="file-input" accept=".mat,.csv,.txt">
   </div>
 
+  <div class="demo-row">
+    <button class="btn-outline" onclick="loadDemoData()">Try demo data</button>
+    <span class="demo-hint">Loads a sample recording</span>
+  </div>
+
   <div id="file-info-section" class="hidden">
     <div class="card" style="margin-bottom:8px">
       <div class="file-chip" id="file-chip-name">—</div>
@@ -1220,7 +1232,7 @@ async function handleFile(file) {
   try {
     const resp = await fetch('/api/upload', { method: 'POST', body: formData });
     const data = await resp.json();
-    if (data.error) { toast(data.error); return; }
+    if (data.error) { toast(data.error); return false; }
     sessionData = data;
     muscles = data.muscles;
     uploadZone.classList.add('has-file');
@@ -1229,8 +1241,24 @@ async function handleFile(file) {
     document.getElementById('file-chip-name').textContent = file.name;
     document.getElementById('file-chip-meta').textContent = data.duration.toFixed(0) + 's, ' + data.fs + ' Hz, ' + data.cols.length + ' channels';
     buildMuscleGrid();
-  } catch(e) { toast('Upload failed: ' + e.message); }
+    return true;
+  } catch(e) { toast('Upload failed: ' + e.message); return false; }
 }
+
+// ═══ DEMO DATA ═══
+async function loadDemoData() {
+  try {
+    const resp = await fetch('/demo_recording.csv');
+    if (!resp.ok) { toast('Demo data unavailable'); return; }
+    const blob = await resp.blob();
+    const file = new File([blob], 'demo_recording.csv', { type: 'text/csv' });
+    if (await handleFile(file)) {
+      toast('Demo data loaded — pick muscles, then Check Fatigue');
+      document.getElementById('muscle-selection').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  } catch(e) { toast('Demo data unavailable'); }
+}
+
 
 function buildMuscleGrid() {
   document.getElementById('muscle-selection').classList.remove('hidden');
@@ -1347,7 +1375,7 @@ function showResults(selected) {
 
   const gaugeOffset = 490 - (490 * avgScore / 100);
   const gf = document.getElementById('results-gauge-fill');
-  gf.setAttribute('stroke', gaugeColor);
+  gf.style.stroke = gaugeColor;
   gf.setAttribute('stroke-dashoffset', gaugeOffset);
   document.getElementById('results-gauge-value').textContent = avgScore + '%';
   document.getElementById('results-gauge-value').style.color = gaugeColor;
@@ -1378,14 +1406,14 @@ function showResults(selected) {
     const badgeClass = 'badge-' + status;
     const badgeText = status==='green'?'Not fatigued':status==='amber'?'Some fatigue':status==='red'?'Needs rest':'No data';
     const tip = r.tip||'';
-    const cleanColor = color.replace('var(','').replace(')','');
-    const svg = muscleThumbSVG(m.id||m.column, cleanColor);
+    const thumbHex = status==='green'?'#00E676':status==='amber'?'#FF9100':status==='red'?'#ef4444':'#a1a1aa';
+    const svg = muscleThumbSVG(m.id||m.column, thumbHex);
     listHTML += '<div class="result-card"><div class="body-svg">' + svg + '</div><div style="flex:1 1 130px;min-width:0"><div class="muscle-name">' + (m.id||m.column) + ' - ' + m.name + '</div><div class="muscle-desc">' + m.desc + '</div><div class="result-tip">' + tip + '</div>' + (r.centroid != null ? '<div style="font-size:11px;color:#7d7d85;margin-top:3px">LOW centroid: ' + r.centroid + ' Hz (8–23 Hz)</div>' : '') + '</div><div class="result-score" style="color:' + color + '">' + score + '</div><span class="result-badge ' + badgeClass + '">' + badgeText + '</span></div>';
   });
   document.getElementById('results-list').innerHTML = listHTML;
 
   // Update welcome screen
-  document.getElementById('gauge-fill').setAttribute('stroke', gaugeColor);
+  document.getElementById('gauge-fill').style.stroke = gaugeColor;
   document.getElementById('gauge-fill').setAttribute('stroke-dashoffset', gaugeOffset);
   document.getElementById('gauge-value').textContent = avgScore + '%';
   document.getElementById('gauge-value').style.color = gaugeColor;
