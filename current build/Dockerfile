@@ -51,6 +51,7 @@ RUN pip install --no-cache-dir --no-index --find-links=/wheels \
 COPY app.py .
 COPY bowen_centroid.py .
 COPY demo.mp4 .
+COPY demo_recording.csv .
 COPY .streamlit/ .streamlit/
 
 # Expose the port
