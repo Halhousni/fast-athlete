@@ -74,13 +74,13 @@ measured speedup is about 7.5x.
 
 ## Why ssqueezepy and not a self-built GPU transform
 
-The original build carried a hand-written WSST with a GPU backend
-the GPU. On that card, an older generation with few shader cores, it only offloaded the Morlet
-kernel and left every FFT on the CPU, so kernel launch overhead likely ate the
-gain. ssqueezepy offers a published implementation with a DOI and CI, several
-wavelet families, and a multi-threaded CPU path that measured faster on the same
-practice. The GPU code and its container dependencies have since been removed
-entirely and the app runs CPU only.
+The original build carried a hand-written WSST with a GPU backend. That backend
+offloaded only the Morlet kernel and left every FFT on the CPU, so kernel launch
+overhead likely cancelled any gain, and it tied the build to one vendor's GPU
+driver. ssqueezepy offers a published implementation with a DOI and CI, several
+wavelet families, and a multi-threaded CPU path that measured faster in practice.
+The GPU code and its container dependencies have since been removed entirely and
+the app runs CPU only.
 
 ## Why the bands run sequentially
 
