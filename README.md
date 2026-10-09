@@ -15,7 +15,7 @@ FAST tracks the downward shift in the EMG power spectrum that happens as a muscl
 fatigues. The signal goes through a synchrosqueezed continuous wavelet transform
 (SSQ-CWT), the spectrum is aggregated into bands, and the low-frequency centroid
 of that band power gives the fatigue index. Recordings are capped at 30 seconds
-per channel. `current build/METHOD.md` has the full description.
+per channel. `DESIGN.md` has the full description.
 
 Results feed a per-muscle traffic light. 70 and above reads as recovered, 40 to
 69 as some fatigue, below 40 as needing rest.
@@ -66,9 +66,10 @@ current build/
   app.py              the server, with the whole UI embedded in it
   bowen_centroid.py   Bowen centroid and the FAST band pipeline
   make_demo_data.py   regenerates the synthetic demo recording
-  METHOD.md           the method, in full
+  requirements.txt    runtime dependencies
   Dockerfile          Python 3.12, CPU only
   docker-compose.yml  container signal-analyzer, port 8501
+  .env.example        copy to .env and set the address the app binds to
   demo.mp4            14 s screen recording on the home screen
   demo_recording.csv  synthetic recording behind "Try demo data"
 ```
