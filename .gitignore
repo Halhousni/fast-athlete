@@ -19,3 +19,6 @@ venv/
 # docker compose environment, holds the site specific bind address
 .env
 !.env.example
+
+# local deployment notes, kept out of the repository
+PIPELINE.md
