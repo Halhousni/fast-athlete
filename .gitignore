@@ -1,9 +1,25 @@
 __pycache__/
 *.pyc
 *.pyo
-.streamlit/*
-!.streamlit/config.toml
+*.pyd
 *.egg-info/
 dist/
 build/
 *.log
+
+# Nextcloud sync artifacts
+*conflicted copy*
+
+# Local runtime data
+/data/
+fast.db
+.venv/
+venv/
+
+# docker compose environment, holds the site specific bind address
+.env
+!.env.example
+
+# Streamlit config is kept only as a leftover from an earlier build
+.streamlit/*
+!.streamlit/config.toml

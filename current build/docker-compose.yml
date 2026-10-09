@@ -12,7 +12,8 @@ services:
         max-size: "10m"
         max-file: "3"
     ports:
-      - "<server-ip>:8501:8501"
+      # Bind address is site specific. Set FAST_BIND_IP in .env (see .env.example).
+      - "${FAST_BIND_IP:-0.0.0.0}:8501:8501"
     volumes:
       - fast_data:/data
     devices:
