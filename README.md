@@ -71,7 +71,9 @@ current build/
 
 ## Deployment
 
-`PIPELINE.md` covers the push to deploy setup.
+The app runs as a Docker container serving port 8501, built from
+`current build/Dockerfile`. The deployment setup for this instance is not
+documented in this repository.
 
 ## Third-party
 
