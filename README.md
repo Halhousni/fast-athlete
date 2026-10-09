@@ -43,9 +43,9 @@ Without that volume every saved profile and result disappears on the next deploy
 
 ## Routes
 
-The page is the only client. Everything below is called by the app's own
-JavaScript, on the same origin. Nothing else calls it, and the server publishes
-no route listing of its own.
+The page embedded in `app.py` is the only client. Every route below is called by
+the script inside that page, on the same origin. Nothing else calls them, and the
+server publishes no route listing of its own.
 
 - `POST /upload` reads a recording and returns the detected channels
 - `POST /analyze` runs FAST on the selected muscles
