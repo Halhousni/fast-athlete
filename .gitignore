@@ -19,7 +19,3 @@ venv/
 # docker compose environment, holds the site specific bind address
 .env
 !.env.example
-
-# Streamlit config is kept only as a leftover from an earlier build
-.streamlit/*
-!.streamlit/config.toml
