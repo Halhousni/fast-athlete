@@ -41,14 +41,18 @@ docker compose up --build -d
 The named volume `fast_data` holds the SQLite database at `/data/fast.db`.
 Without that volume every saved profile and result disappears on the next deploy.
 
-## API
+## Routes
 
-- `POST /api/upload` reads a recording and returns the detected channels
-- `POST /api/analyze` runs FAST on the selected muscles
-- `GET /api/profiles`, `POST /api/profiles`, `POST /api/profiles/verify`,
-  `DELETE /api/profiles/{id}` handle athlete profiles and their optional 4 digit PIN
-- `POST /api/save` stores one assessment against a profile
-- `GET /api/history?profile_id=N` returns the last 50 assessments, newest first
+The page is the only client. Everything below is called by the app's own
+JavaScript, on the same origin. Nothing else calls it, and the server publishes
+no route listing of its own.
+
+- `POST /upload` reads a recording and returns the detected channels
+- `POST /analyze` runs FAST on the selected muscles
+- `GET /profiles`, `POST /profiles`, `POST /profiles/verify`,
+  `DELETE /profiles/{id}` handle athlete profiles and their optional 4 digit PIN
+- `POST /save` stores one assessment against a profile
+- `GET /history?profile_id=N` returns the last 50 assessments, newest first
 - `GET /demo.mp4` and `GET /demo_recording.csv` serve the assets behind the home
   screen demo and the "Try demo data" button
 
@@ -59,7 +63,7 @@ Profiles live in SQLite, created with stdlib `sqlite3` only. The PIN is stored a
 
 ```
 current build/
-  app.py              FastAPI app, the entire UI is an embedded HTML page
+  app.py              the server, with the whole UI embedded in it
   bowen_centroid.py   Bowen centroid and the FAST band pipeline
   make_demo_data.py   regenerates the synthetic demo recording
   METHOD.md           the method, in full

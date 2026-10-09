@@ -1,6 +1,6 @@
 """FAST — Muscle Fatigue Check
 
-Material Design 3 frontend + FastAPI backend.
+Material Design 3 frontend and a Python backend.
 Filter & Aggregate Synchrosqueezed Transform.
 """
 from __future__ import annotations
@@ -149,10 +149,10 @@ MUSCLES = [
 ]
 
 # ═══════════════════════════════════════════════════
-# FASTAPI
+# SERVER
 # ═══════════════════════════════════════════════════
 
-app = FastAPI(title='FAST')
+app = FastAPI(title='FAST', docs_url=None, redoc_url=None, openapi_url=None)
 session_store = {}
 SESSION_DIR = tempfile.mkdtemp(prefix='fast_sessions_')
 
@@ -221,7 +221,7 @@ _init_db()
 def _hash_pin(pin):
     return hashlib.sha256(('fast|' + pin).encode()).hexdigest()
 
-@app.get('/api/profiles')
+@app.get('/profiles')
 async def list_profiles():
     conn = _db()
     rows = conn.execute(
@@ -230,7 +230,7 @@ async def list_profiles():
     conn.close()
     return {'profiles': [dict(r) for r in rows]}
 
-@app.post('/api/profiles')
+@app.post('/profiles')
 async def create_profile(data: dict):
     name = (data.get('name') or '').strip()
     if not name:
@@ -252,7 +252,7 @@ async def create_profile(data: dict):
     conn.close()
     return {'id': pid, 'name': name}
 
-@app.post('/api/profiles/verify')
+@app.post('/profiles/verify')
 async def verify_profile(data: dict):
     pid = data.get('id')
     pin = (data.get('pin') or '').strip()
@@ -265,7 +265,7 @@ async def verify_profile(data: dict):
         return JSONResponse({'error': 'Wrong PIN'}, status_code=403)
     return {'id': pid, 'name': row['name']}
 
-@app.delete('/api/profiles/{profile_id}')
+@app.delete('/profiles/{profile_id}')
 async def delete_profile(profile_id: int):
     conn = _db()
     conn.execute('DELETE FROM results WHERE profile_id=?', (profile_id,))
@@ -276,7 +276,7 @@ async def delete_profile(profile_id: int):
         return JSONResponse({'error': 'Profile not found'}, status_code=404)
     return {'ok': True}
 
-@app.post('/api/save')
+@app.post('/save')
 async def save_result(data: dict):
     pid = data.get('profile_id')
     if not pid:
@@ -299,7 +299,7 @@ async def save_result(data: dict):
     conn.close()
     return {'id': rid}
 
-@app.get('/api/history')
+@app.get('/history')
 async def history(profile_id: int):
     conn = _db()
     rows = conn.execute(
@@ -321,7 +321,7 @@ async def history(profile_id: int):
 async def index():
     return HTML_PAGE
 
-@app.post('/api/upload')
+@app.post('/upload')
 async def upload(file: UploadFile = File(...)):
     content = await file.read()
     try:
@@ -350,7 +350,7 @@ async def upload(file: UploadFile = File(...)):
         'muscles': _match_columns(cols),
     })
 
-@app.post('/api/analyze')
+@app.post('/analyze')
 async def analyze(data: dict):
     print(f"ANALYZE called: session={data.get('session','?')[:8]}..., muscles={len(data.get('muscles',[]))}", flush=True)
     try:
@@ -1230,7 +1230,7 @@ async function handleFile(file) {
   const formData = new FormData();
   formData.append('file', file);
   try {
-    const resp = await fetch('/api/upload', { method: 'POST', body: formData });
+    const resp = await fetch('/upload', { method: 'POST', body: formData });
     const data = await resp.json();
     if (data.error) { toast(data.error); return false; }
     sessionData = data;
@@ -1322,7 +1322,7 @@ async function runAnalysis() {
   document.getElementById('prog-step').textContent = selected.length + ' muscle' + (selected.length>1?'s':'') + ' selected';
 
   try {
-    const resp = await fetch('/api/analyze', {
+    const resp = await fetch('/analyze', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({ session: sessionData.session, muscles: selected })
@@ -1586,7 +1586,7 @@ async function loadProfileScreen() {
   let stats = null;
   if (profile) {
     try {
-      const resp = await fetch('/api/history?profile_id=' + profile.id);
+      const resp = await fetch('/history?profile_id=' + profile.id);
       const data = await resp.json();
       const h = data.history || [];
       const scores = h.map(x => x.avg_score).filter(s => s != null);
@@ -1621,7 +1621,7 @@ async function loadProfileScreen() {
 
 async function loadProfiles() {
   try {
-    const resp = await fetch('/api/profiles');
+    const resp = await fetch('/profiles');
     const data = await resp.json();
     profileList = data.profiles || [];
     const list = document.getElementById('profile-list');
@@ -1654,7 +1654,7 @@ function cancelDelete() { deleteTarget = null; loadProfiles(); }
 async function confirmDelete(id) {
   deleteTarget = null;
   try {
-    const resp = await fetch('/api/profiles/' + id, {method: 'DELETE'});
+    const resp = await fetch('/profiles/' + id, {method: 'DELETE'});
     if (!resp.ok) { toast('Could not delete profile.'); return; }
     if (profile && profile.id === id) {
       profile = null;
@@ -1695,7 +1695,7 @@ async function confirmPin() {
   const input = document.getElementById('pin-input');
   const pin = input.value.trim();
   if (!pin) { input.focus(); return; }
-  const resp = await fetch('/api/profiles/verify', {
+  const resp = await fetch('/profiles/verify', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({id: pinTarget, pin: pin})
   });
@@ -1714,7 +1714,7 @@ async function createProfile() {
   const name = document.getElementById('new-profile-name').value.trim();
   const pin = document.getElementById('new-profile-pin').value.trim();
   if (!name) { toast('Enter a name first.'); return; }
-  const resp = await fetch('/api/profiles', {
+  const resp = await fetch('/profiles', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({name: name, pin: pin || undefined})
   });
@@ -1744,7 +1744,7 @@ async function saveAssessment(avgScore, overallStatus) {
     centroid: (m.result || {}).centroid
   }));
   try {
-    const resp = await fetch('/api/save', {
+    const resp = await fetch('/save', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({
         profile_id: profile.id,
@@ -1770,7 +1770,7 @@ async function loadHistory() {
   list.innerHTML = '<div class="card skeleton-card"><div class="skeleton skeleton-line"></div><div class="skeleton skeleton-line short"></div><div class="skeleton-chips"><div class="skeleton skeleton-chip"></div><div class="skeleton skeleton-chip"></div><div class="skeleton skeleton-chip"></div></div></div>' +
     '<div class="card skeleton-card"><div class="skeleton skeleton-line"></div><div class="skeleton skeleton-line short"></div><div class="skeleton-chips"><div class="skeleton skeleton-chip"></div><div class="skeleton skeleton-chip"></div></div></div>';
   try {
-    const resp = await fetch('/api/history?profile_id=' + profile.id);
+    const resp = await fetch('/history?profile_id=' + profile.id);
     const data = await resp.json();
     historyData = data.history || [];
     historyFilter = 'all';
@@ -1926,7 +1926,7 @@ async function updateResultsTrend() {
     return;
   }
   try {
-    const resp = await fetch('/api/history?profile_id=' + profile.id);
+    const resp = await fetch('/history?profile_id=' + profile.id);
     const data = await resp.json();
     const h = (data.history || []).filter(x => x.avg_score != null).reverse();
     if (!h.length) {
@@ -1956,7 +1956,7 @@ async function loadTrain() {
   let history = [];
   if (profile) {
     try {
-      const resp = await fetch('/api/history?profile_id=' + profile.id);
+      const resp = await fetch('/history?profile_id=' + profile.id);
       const data = await resp.json();
       history = data.history || [];
       latest = history[0] || null;

@@ -540,7 +540,7 @@ GAPS between this Python implementation and Bowen's MATLAB pipeline
 5. GROUP-LEVEL BOOTSTRAP NOT APPLICABLE
    §6.5 describes pointwise bootstrap over multiple participants.  Not
    meaningful in a single-recording athlete app.  Included as
-   compute_group_trajectory() for API completeness only.
+   compute_group_trajectory() for completeness only.
 
 6. FATIGUE CLASSIFICATION NOT SPECIFIED BY BOWEN
    The centroid computation stops at computing the value in Hz.  The spec
