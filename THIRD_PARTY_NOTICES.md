@@ -47,4 +47,3 @@ Declared in `current build/requirements.txt`. All are permissively licensed.
 | scipy | BSD-3-Clause |
 | ssqueezepy | MIT |
 | pandas | BSD-3-Clause |
-
