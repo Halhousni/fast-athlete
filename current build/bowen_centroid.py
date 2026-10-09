@@ -326,24 +326,17 @@ def whole_phase_trajectory(
             # Target x: 0..100% in n_points
             tgt_x = np.linspace(0, 1, n_points)
 
-            # Find contiguous valid runs
+            # Linear interpolation, restricted to contiguous runs of valid samples.
+            # A target point is filled only when both neighbouring source samples are
+            # valid, so a NaN gap in the source stays a NaN gap in the trajectory.
             valid = ~np.isnan(segment)
-            # Use simple numpy interpolation for contiguous segments
-            # For each target point, find nearest valid source within range
-            for i, tx in enumerate(tgt_x):
-                # Find source indices whose x bounds bracket the target
-                # Simple approach: nearest valid source index, but only if
-                # both neighbours are in the same contiguous block
-                # GAP: The MATLAB 'segment-aware' interpolation likely uses
-                # interp1 with linear method restricted to contiguous valid
-                # stretches.  We approximate with nearest-neighbour within
-                # contiguous blocks.
-                diffs = np.abs(src_x - tx)
-                # Find nearest valid point
-                valid_diffs = np.where(valid, diffs, np.inf)
-                nearest_idx = np.argmin(valid_diffs)
-                if valid_diffs[nearest_idx] < (1.0 / (n_seg - 1)) * 1.5 if n_seg > 1 else np.inf:
-                    traj[i] = segment[nearest_idx]
+            idx = np.searchsorted(src_x, tgt_x, side='right') - 1
+            idx = np.clip(idx, 0, n_seg - 2)
+            x0, x1 = src_x[idx], src_x[idx + 1]
+            y0, y1 = segment[idx], segment[idx + 1]
+            ok = valid[idx] & valid[idx + 1]
+            w = np.where(x1 > x0, (tgt_x - x0) / (x1 - x0), 0.0)
+            traj = np.where(ok, y0 + w * (y1 - y0), np.nan)
 
         trajectories[label] = traj
 
