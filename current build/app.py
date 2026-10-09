@@ -4,7 +4,7 @@ Material Design 3 frontend and a Python backend.
 Filter & Aggregate Synchrosqueezed Transform.
 """
 from __future__ import annotations
-import asyncio, io, time, re, itertools, base64, json, tempfile, pickle, os, sqlite3, hashlib, datetime
+import uuid, asyncio, io, time, re, itertools, base64, json, tempfile, pickle, os, sqlite3, hashlib, datetime
 import numpy as np
 import scipy.io
 import pandas as pd
@@ -84,7 +84,7 @@ def _load_file(content, name):
             if data_df is not None: break
         if data_df is not None:
             data_df.columns = [c.replace('"', '').strip() for c in data_df.columns]
-            data_df = data_df.apply(pd.to_numeric, errors='coerce').fillna(0)
+            data_df = data_df.apply(pd.to_numeric, errors='coerce')
     return data_df, detected_fs
 
 def _muscle_columns(data_df):
@@ -119,11 +119,13 @@ def _classify_fatigue(Tx_fast, ssq_freqs,
         if np.isnan(nfi_mean):
             status, score, tip = 'grey', 0, 'Could not compute'
         elif nfi_mean < green_nfi:
-            status, score, tip = 'green', int(100 - nfi_mean * 2), 'No fatigue detected'
+            status, score, tip = 'green', int(min(100, 100 - max(nfi_mean, 0) * 2)), 'No fatigue detected'
         elif nfi_mean < amber_nfi:
-            status, score, tip = 'amber', int(100 - nfi_mean * 2), 'Early fatigue signs'
+            frac = (nfi_mean - green_nfi) / (amber_nfi - green_nfi)
+            status, score, tip = 'amber', int(69 - frac * 29), 'Early fatigue signs'
         else:
-            status, score, tip = 'red', max(0, int(100 - nfi_mean * 2)), 'Significant fatigue'
+            frac = min(1.0, (nfi_mean - amber_nfi) / 25.0)
+            status, score, tip = 'red', int(39 - frac * 39), 'Significant fatigue'
         return dict(status=status, score=max(0, min(100, score)), tip=tip)
 
 # ═══════════════════════════════════════════════════
@@ -171,6 +173,8 @@ def _save_session(sid, data):
     session_store[sid] = data
 
 def _load_session(sid):
+    if not isinstance(sid, str) or not re.fullmatch(r'[0-9a-f]{32}', sid):
+        return None
     if sid in session_store:
         return session_store[sid]
     path = os.path.join(SESSION_DIR, sid)
@@ -333,7 +337,7 @@ async def upload(file: UploadFile = File(...)):
     cols = _muscle_columns(df)
     if not cols:
         return JSONResponse({'error': 'No channels detected'}, status_code=400)
-    sid = base64.urlsafe_b64encode(file.filename.encode()).decode()[:16]
+    sid = uuid.uuid4().hex
     # Store as serializable types
     _save_session(sid, {
         'data': {c: df[c].tolist() for c in cols},
@@ -351,7 +355,7 @@ async def upload(file: UploadFile = File(...)):
     })
 
 @app.post('/analyze')
-async def analyze(data: dict):
+def analyze(data: dict):
     print(f"ANALYZE called: session={data.get('session','?')[:8]}..., muscles={len(data.get('muscles',[]))}", flush=True)
     try:
         sid = data.get('session')
@@ -375,7 +379,7 @@ async def analyze(data: dict):
             if len(sig) > max_samples:
                 sig = sig[:max_samples]
             if np.isnan(sig).any() or np.isinf(sig).any() or np.std(sig) < 1e-10:
-                results[mid] = dict(status='grey', score=0, tip='Bad or flat data')
+                results[mid] = dict(status='grey', score=0, tip='Missing, invalid or flat data')
                 continue
             try:
                 Tx_fast, _, ssq_freqs = _run_fast(sig, fs, 1.0, 35.0, 1.0, 32)
@@ -1738,6 +1742,7 @@ function updateProfileChip() {
 async function saveAssessment(avgScore, overallStatus) {
   if (!profile) { toast('Add a profile to save results'); return; }
   if (!lastResults || !lastResults.length) return;
+  if (!lastResults.some(m => { const st = (m.result || {}).status; return st && st !== 'grey'; })) return;
   const results = lastResults.map(m => ({
     id: m.id || m.column, name: m.name,
     status: (m.result || {}).status, score: (m.result || {}).score,
