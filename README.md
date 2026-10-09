@@ -38,9 +38,8 @@ cd "current build"
 docker compose up --build -d
 ```
 
-The container needs no device pass-through. The named volume
-`fast_data` holds the SQLite database at `/data/fast.db`. Without that volume
-every saved profile and result disappears on the next deploy.
+The named volume `fast_data` holds the SQLite database at `/data/fast.db`.
+Without that volume every saved profile and result disappears on the next deploy.
 
 ## API
 

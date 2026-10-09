@@ -16,8 +16,6 @@ services:
       - "${FAST_BIND_IP:-0.0.0.0}:8501:8501"
     volumes:
       - fast_data:/data
-    devices:
-
     restart: unless-stopped
 volumes:
   fast_data:
