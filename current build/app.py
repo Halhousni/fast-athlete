@@ -4,17 +4,18 @@ Material Design 3 frontend and a Python backend.
 Filter & Aggregate Synchrosqueezed Transform.
 """
 from __future__ import annotations
-import uuid, asyncio, io, time, re, itertools, base64, json, tempfile, pickle, os, sqlite3, hashlib, datetime
+import uuid, io, time, re, itertools, json, tempfile, os, sqlite3, hashlib, hmac, secrets, threading, collections, datetime
 import numpy as np
 import scipy.io
 import pandas as pd
 from scipy.signal import butter, filtfilt
 from ssqueezepy import ssq_cwt
-from fastapi import FastAPI, UploadFile, File, Form
+from fastapi import FastAPI, UploadFile, File, Form, Header
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 import uvicorn
 from bowen_centroid import run_bowen_pipeline
 
+__version__ = '0.02'
 _APP_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # ═══════════════════════════════════════════════════
@@ -27,7 +28,7 @@ def _process_single_band(f1, x, fs, voices_per_octave=32, order=4):
     nyq = 0.5 * fs
     if filband1 >= filband2 or filband2 >= nyq: return None
     b, a = butter(max(1, order // 2), [filband1 / nyq, filband2 / nyq], btype='band')
-    Tx, _, _, _ = ssq_cwt(filtfilt(b, a, x), fs=fs, nv=32, wavelet=('morlet', {'mu': 6}))
+    Tx, _, _, _ = ssq_cwt(filtfilt(b, a, x), fs=fs, nv=voices_per_octave, wavelet=('morlet', {'mu': 6}))
     return Tx
 
 def _fast_aggregate(x, fs, freq_steps, voices_per_octave=32):
@@ -40,38 +41,92 @@ def _fast_aggregate(x, fs, freq_steps, voices_per_octave=32):
     if W_agg is not None and n_valid > 1: W_agg /= n_valid
     return W_agg
 
+def _decim_steps(q):
+    """Split a decimation factor into stages of at most 8 (scipy advises this for IIR)."""
+    steps, r = [], q
+    for p in (2, 3, 5, 7):
+        while r % p == 0:
+            steps.append(p); r //= p
+    if r > 1: steps.append(r)
+    out, cur = [], 1
+    for st in sorted(steps):
+        if cur * st <= 8: cur *= st
+        else: out.append(cur); cur = st
+    out.append(cur)
+    return out
+
 def _run_fast(sig, fs, f_min, f_max, df_step=1.0, voices_per_octave=32):
+    """Returns (Tx_fast, Tx_orig, ssq_freqs, fs_eff). fs_eff is the sampling rate after decimation."""
     from scipy.signal import decimate
     target_fs = 200.0
-    if fs > target_fs:
-        q = int(fs / target_fs); sig = decimate(sig, q, ftype='iir'); fs = target_fs
+    q = int(round(fs / target_fs))
+    if q >= 2:
+        for step in _decim_steps(q):
+            sig = decimate(sig, step, ftype='iir')
+        fs = fs / q
     freq_steps = np.arange(f_min, f_max, df_step)
     Tx_orig, _, ssq_freqs, _ = ssq_cwt(sig, fs=fs, nv=voices_per_octave, wavelet=('morlet', {'mu': 6}))
     W_agg = _fast_aggregate(sig, fs, freq_steps, voices_per_octave)
     mean_power = np.mean(np.abs(Tx_orig) ** 2)
     mask = (np.abs(Tx_orig) ** 2 > 0.9 * mean_power).astype(float)
     if W_agg is None: W_agg = np.zeros_like(Tx_orig, dtype=complex)
-    return W_agg * mask, Tx_orig, ssq_freqs
+    return W_agg * mask, Tx_orig, ssq_freqs, fs
+
+# Header line such as "# fs: 2000" or "Sampling rate (Hz), 1500". Anchored to the start of
+# the line so a channel called "Freq" or a number in a data row cannot be mistaken for it.
+_FS_LINE = re.compile(r'^\s*#?\s*(?:fs|sampling[ _-]?(?:rate|freq(?:uency)?)|sample[ _-]?(?:rate|freq(?:uency)?))'
+                      r'\s*(?:\(\s*hz\s*\))?\s*[:=,\t;]\s*(\d+(?:\.\d+)?)', re.I)
+_TIME_COL = re.compile(r'^(time|t|timestamp|seconds|sec|time\s*\(\s*(?:s|ms|sec|seconds)\s*\)|time[_ ]?(?:s|ms|sec))$', re.I)
+_MS_COL = re.compile(r'(\bms\b|_ms\b|\(ms\)|milli)', re.I)
+
+def _sane_fs(v):
+    try: v = float(v)
+    except (TypeError, ValueError): return None
+    return v if 10.0 <= v <= 50000.0 else None
+
+def _fs_from_time(df):
+    """Sampling rate from a Time column (seconds, or milliseconds if the name says so)."""
+    for c in df.columns:
+        if _TIME_COL.match(str(c)):
+            t = df[c].to_numpy(dtype=float)
+            d = np.diff(t[np.isfinite(t)])
+            d = d[d > 0]
+            if len(d) >= 2:
+                dt = float(np.median(d))
+                if _MS_COL.search(str(c)): dt /= 1000.0
+                return 1.0 / dt
+            return None
+    return None
 
 def _load_file(content, name):
     from io import BytesIO
     detected_fs, data_df = None, None
-    if name.endswith('.mat'):
+    if name.lower().endswith('.mat'):
         mat = scipy.io.loadmat(BytesIO(content))
         for k in mat.keys():
+            if k.startswith('__'): continue
             if re.search(r'^fs$|samp|rate', k, re.I):
-                try: detected_fs = float(np.array(mat[k]).ravel()[0])
+                try:
+                    a = np.array(mat[k]).ravel()
+                    if a.size == 1: detected_fs = float(a[0])
                 except Exception: pass
-        valid = {k: mat[k].flatten() for k in mat
-                 if not k.startswith('__') and mat[k].ndim <= 2
-                 and np.issubdtype(mat[k].dtype, np.number)}
-        if valid:
-            ml = min(len(v) for v in valid.values())
-            data_df = pd.DataFrame({k: v[:ml] for k, v in valid.items()})
+        cols = {}
+        for k, v in mat.items():
+            if k.startswith('__') or not isinstance(v, np.ndarray): continue
+            if v.ndim > 2 or v.size < 2 or not (np.issubdtype(v.dtype, np.floating) or np.issubdtype(v.dtype, np.integer)): continue
+            if v.ndim == 2 and min(v.shape) > 1:
+                m2 = v if v.shape[0] >= v.shape[1] else v.T
+                if m2.shape[1] > 64: continue
+                for j in range(m2.shape[1]): cols['%s_%d' % (k, j + 1)] = m2[:, j].astype(float)
+            else:
+                cols[k] = v.flatten().astype(float)
+        if cols:
+            ml = min(len(v) for v in cols.values())
+            data_df = pd.DataFrame({k: v[:ml] for k, v in cols.items()})
     else:
         raw = content.decode('utf-8', errors='replace')
         for line in raw.splitlines()[:20]:
-            m = re.search(r'(?:fs|freq|sample.?rate|sampling.?rate)[^\d]*(\d+(?:\.\d+)?)', line, re.I)
+            m = _FS_LINE.match(line)
             if m: detected_fs = float(m.group(1)); break
         for sep in [',', '\t', ';']:
             for skip in range(6):
@@ -83,12 +138,15 @@ def _load_file(content, name):
                 except Exception: pass
             if data_df is not None: break
         if data_df is not None:
-            data_df.columns = [c.replace('"', '').strip() for c in data_df.columns]
+            data_df.columns = [str(c).replace('"', '').strip() for c in data_df.columns]
+            # Missing samples stay NaN. They are reported later instead of becoming zeros.
             data_df = data_df.apply(pd.to_numeric, errors='coerce')
-    return data_df, detected_fs
+    if data_df is not None and detected_fs is None:
+        detected_fs = _fs_from_time(data_df)
+    return data_df, _sane_fs(detected_fs)
 
 def _muscle_columns(data_df):
-    excl = re.compile(r'time|marker|trigger|sync|ref|event|frame|sample|^(uV|mV)(\.\d+)?$', re.I)
+    excl = re.compile(r'time|marker|trigger|sync|ref|event|frame|sample|^t$|^sec(onds)?$|^(uV|mV)(\.\d+)?$', re.I)
     return [c for c in data_df.columns if not excl.search(c)]
 
 def _mif_time_series(Tx_fast, ssq_freqs, f_min=1.0, f_max=35.0):
@@ -101,7 +159,7 @@ def _mif_time_series(Tx_fast, ssq_freqs, f_min=1.0, f_max=35.0):
 
 def _classify_fatigue(Tx_fast, ssq_freqs,
                       f_min=1.0, f_max=35.0, baseline_s=5.0,
-                      green_nfi=15.0, amber_nfi=35.0):
+                      green_nfi=15.0, amber_nfi=35.0, fs_eff=200.0):
     import warnings
     with warnings.catch_warnings():
         warnings.simplefilter('ignore')
@@ -111,7 +169,9 @@ def _classify_fatigue(Tx_fast, ssq_freqs,
             return dict(status='grey', score=0, tip='No signal energy in band')
         mif_median = float(np.median(mif_time[valid_t]))
         n_time = len(mif_time)
-        n_baseline = max(3, min(int(baseline_s * 200), n_time))
+        if n_time < 2 * baseline_s * fs_eff:
+            return dict(status='grey', score=0, tip='Recording too short (needs at least %d s)' % int(2 * baseline_s))
+        n_baseline = max(3, min(int(baseline_s * fs_eff), n_time))
         baseline_slice = mif_time[:n_baseline]
         bl_valid = ~np.isnan(baseline_slice)
         mif_baseline = float(np.median(baseline_slice[bl_valid])) if bl_valid.any() else mif_median
@@ -155,8 +215,25 @@ MUSCLES = [
 # ═══════════════════════════════════════════════════
 
 app = FastAPI(title='FAST', docs_url=None, redoc_url=None, openapi_url=None)
-session_store = {}
+
+MAX_UPLOAD_BYTES = int(os.environ.get('FAST_MAX_UPLOAD_MB', '20')) * 1024 * 1024
+MAX_SECONDS = 30
+MIN_FS = 100.0
+SESSION_TTL = 2 * 3600
+SESSION_KEEP = 50
+MEM_SESSIONS = 8
+TOKEN_TTL = 12 * 3600
+PIN_MAX_FAILS = 5
+PIN_LOCK_S = 60
+
+session_store = collections.OrderedDict()
 SESSION_DIR = tempfile.mkdtemp(prefix='fast_sessions_')
+_SID_RE = re.compile(r'[0-9a-f]{32}')
+_lock = threading.Lock()
+
+@app.get('/health')
+def health():
+    return {'ok': True, 'version': __version__}
 
 @app.get('/demo.mp4')
 async def demo_video():
@@ -167,30 +244,61 @@ async def demo_recording_csv():
     return FileResponse(os.path.join(_APP_DIR, 'demo_recording.csv'),
                         media_type='text/csv', filename='demo_recording.csv')
 
+def _prune_sessions():
+    """Delete session files that are old or beyond the newest SESSION_KEEP."""
+    try:
+        paths = [os.path.join(SESSION_DIR, n) for n in os.listdir(SESSION_DIR)]
+        files = sorted(((os.path.getmtime(p), p) for p in paths if os.path.isfile(p)), reverse=True)
+    except OSError:
+        return
+    now = time.time()
+    for i, (mt, p) in enumerate(files):
+        if i >= SESSION_KEEP or now - mt > SESSION_TTL:
+            try: os.remove(p)
+            except OSError: pass
+            session_store.pop(os.path.basename(p), None)
+
 def _save_session(sid, data):
-    with open(os.path.join(SESSION_DIR, sid), 'wb') as f:
-        pickle.dump(data, f)
-    session_store[sid] = data
+    # JSON, never pickle: a session file must not be able to run code when it is read back.
+    with open(os.path.join(SESSION_DIR, sid), 'w') as f:
+        json.dump(data, f)
+    with _lock:
+        session_store[sid] = data
+        session_store.move_to_end(sid)
+        while len(session_store) > MEM_SESSIONS:
+            session_store.popitem(last=False)
+        _prune_sessions()
 
 def _load_session(sid):
-    if not isinstance(sid, str) or not re.fullmatch(r'[0-9a-f]{32}', sid):
+    if not isinstance(sid, str) or not _SID_RE.fullmatch(sid):
         return None
-    if sid in session_store:
-        return session_store[sid]
-    path = os.path.join(SESSION_DIR, sid)
-    if os.path.exists(path):
-        with open(path, 'rb') as f:
-            data = pickle.load(f)
+    with _lock:
+        if sid in session_store:
+            session_store.move_to_end(sid)
+            return session_store[sid]
+    try:
+        with open(os.path.join(SESSION_DIR, sid)) as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return None
+    with _lock:
         session_store[sid] = data
-        return data
-    return None
+        while len(session_store) > MEM_SESSIONS:
+            session_store.popitem(last=False)
+    return data
 
 # ═══════════════════════════════════════════════════
 # PROFILES + SAVED RESULTS (SQLite)
 # ═══════════════════════════════════════════════════
 
 DATA_DIR = os.environ.get('FAST_DATA_DIR', '/data')
-os.makedirs(DATA_DIR, exist_ok=True)
+try:
+    os.makedirs(DATA_DIR, exist_ok=True)
+    if not os.access(DATA_DIR, os.W_OK): raise OSError('not writable')
+except OSError:
+    # Running outside the container as a normal user: keep the data beside the app.
+    DATA_DIR = os.path.join(_APP_DIR, 'data')
+    os.makedirs(DATA_DIR, exist_ok=True)
 DB_PATH = os.path.join(DATA_DIR, 'fast.db')
 
 def _db():
@@ -201,7 +309,7 @@ def _db():
 
 def _init_db():
     conn = _db()
-    conn.executescript('''
+    conn.executescript(r"""
     CREATE TABLE IF NOT EXISTS profiles(
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL UNIQUE,
@@ -216,17 +324,62 @@ def _init_db():
       status TEXT,
       detail TEXT
     );
-    ''')
+    """)
     conn.commit()
     conn.close()
 
 _init_db()
 
-def _hash_pin(pin):
+def _pin_text(v):
+    return '' if v is None else str(v).strip()
+
+def _as_int(v):
+    try: return int(v)
+    except (TypeError, ValueError): return None
+
+def _legacy_hash(pin):
     return hashlib.sha256(('fast|' + pin).encode()).hexdigest()
 
+def _hash_pin(pin, salt=None):
+    salt = salt or secrets.token_hex(8)
+    dk = hashlib.pbkdf2_hmac('sha256', pin.encode(), bytes.fromhex(salt), 120000).hex()
+    return 'pbkdf2$%s$%s' % (salt, dk)
+
+def _check_pin(stored, pin):
+    """Accepts salted hashes and the unsalted v0.01 hashes, so existing PINs keep working."""
+    if stored.startswith('pbkdf2$'):
+        parts = stored.split('$')
+        return len(parts) == 3 and hmac.compare_digest(stored, _hash_pin(pin, parts[1]))
+    return hmac.compare_digest(stored, _legacy_hash(pin))
+
+_tokens = {}       # token -> (profile_id, expiry)
+_pin_fails = {}    # profile_id -> [fail_count, locked_until]
+
+def _issue_token(pid):
+    now = time.time()
+    for t, (_, exp) in list(_tokens.items()):
+        if exp < now: _tokens.pop(t, None)
+    tok = secrets.token_urlsafe(24)
+    _tokens[tok] = (pid, now + TOKEN_TTL)
+    return tok
+
+def _authorize(pid, token):
+    """None when allowed. Profiles with a PIN need the token issued by /profiles/verify.
+    Profiles without a PIN are open by design."""
+    conn = _db()
+    row = conn.execute('SELECT pin_hash FROM profiles WHERE id=?', (pid,)).fetchone()
+    conn.close()
+    if not row:
+        return JSONResponse({'error': 'Profile not found'}, status_code=404)
+    if not row['pin_hash']:
+        return None
+    ent = _tokens.get(token or '')
+    if ent and ent[0] == pid and ent[1] > time.time():
+        return None
+    return JSONResponse({'error': "Enter this profile's PIN first"}, status_code=401)
+
 @app.get('/profiles')
-async def list_profiles():
+def list_profiles():
     conn = _db()
     rows = conn.execute(
         'SELECT id, name, pin_hash IS NOT NULL AS has_pin FROM profiles ORDER BY name'
@@ -235,11 +388,11 @@ async def list_profiles():
     return {'profiles': [dict(r) for r in rows]}
 
 @app.post('/profiles')
-async def create_profile(data: dict):
-    name = (data.get('name') or '').strip()
+def create_profile(data: dict):
+    name = str(data.get('name') or '').strip()[:40]
     if not name:
         return JSONResponse({'error': 'Name is required'}, status_code=400)
-    pin = (data.get('pin') or '').strip()
+    pin = _pin_text(data.get('pin'))
     if pin and (not pin.isdigit() or len(pin) != 4):
         return JSONResponse({'error': 'PIN must be 4 digits'}, status_code=400)
     conn = _db()
@@ -254,47 +407,86 @@ async def create_profile(data: dict):
         conn.close()
         return JSONResponse({'error': 'That name is already taken'}, status_code=409)
     conn.close()
-    return {'id': pid, 'name': name}
+    out = {'id': pid, 'name': name}
+    if pin: out['token'] = _issue_token(pid)
+    return out
 
 @app.post('/profiles/verify')
-async def verify_profile(data: dict):
-    pid = data.get('id')
-    pin = (data.get('pin') or '').strip()
+def verify_profile(data: dict):
+    pid = _as_int(data.get('id'))
+    pin = _pin_text(data.get('pin'))
+    now = time.time()
+    fails = _pin_fails.get(pid)
+    if fails and fails[1] > now:
+        return JSONResponse({'error': 'Too many wrong PINs. Try again in %d s.' % int(fails[1] - now + 1)}, status_code=429)
     conn = _db()
     row = conn.execute('SELECT name, pin_hash FROM profiles WHERE id=?', (pid,)).fetchone()
     conn.close()
     if not row:
         return JSONResponse({'error': 'Profile not found'}, status_code=404)
-    if row['pin_hash'] and row['pin_hash'] != _hash_pin(pin):
-        return JSONResponse({'error': 'Wrong PIN'}, status_code=403)
-    return {'id': pid, 'name': row['name']}
+    out = {'id': pid, 'name': row['name']}
+    if row['pin_hash']:
+        if not _check_pin(row['pin_hash'], pin):
+            f = _pin_fails.setdefault(pid, [0, 0.0])
+            f[0] += 1
+            if f[0] >= PIN_MAX_FAILS:
+                f[0], f[1] = 0, now + PIN_LOCK_S
+            return JSONResponse({'error': 'Wrong PIN'}, status_code=403)
+        _pin_fails.pop(pid, None)
+        if not row['pin_hash'].startswith('pbkdf2$'):
+            conn = _db()
+            conn.execute('UPDATE profiles SET pin_hash=? WHERE id=?', (_hash_pin(pin), pid))
+            conn.commit(); conn.close()
+        out['token'] = _issue_token(pid)
+    return out
 
 @app.delete('/profiles/{profile_id}')
-async def delete_profile(profile_id: int):
+def delete_profile(profile_id: int, x_profile_token: str | None = Header(None)):
+    denied = _authorize(profile_id, x_profile_token)
+    if denied: return denied
     conn = _db()
     conn.execute('DELETE FROM results WHERE profile_id=?', (profile_id,))
     cur = conn.execute('DELETE FROM profiles WHERE id=?', (profile_id,))
     conn.commit()
     conn.close()
+    for t, (p, _) in list(_tokens.items()):
+        if p == profile_id: _tokens.pop(t, None)
     if cur.rowcount == 0:
         return JSONResponse({'error': 'Profile not found'}, status_code=404)
     return {'ok': True}
 
+def _clean_results(items):
+    out = []
+    for r in (items if isinstance(items, list) else [])[:64]:
+        if not isinstance(r, dict): continue
+        score, cen = r.get('score'), r.get('centroid')
+        out.append({
+            'id': str(r.get('id', ''))[:80], 'name': str(r.get('name', ''))[:80],
+            'status': r.get('status') if r.get('status') in ('green', 'amber', 'red', 'grey') else 'grey',
+            'score': score if isinstance(score, (int, float)) and not isinstance(score, bool) else None,
+            'centroid': cen if isinstance(cen, (int, float)) and not isinstance(cen, bool) else None,
+        })
+    return out
+
 @app.post('/save')
-async def save_result(data: dict):
-    pid = data.get('profile_id')
+def save_result(data: dict, x_profile_token: str | None = Header(None)):
+    pid = _as_int(data.get('profile_id'))
     if not pid:
         return JSONResponse({'error': 'No profile'}, status_code=400)
+    denied = _authorize(pid, x_profile_token)
+    if denied: return denied
     detail = json.dumps({
-        'filename': data.get('filename', ''),
-        'results': data.get('results', []),
+        'filename': str(data.get('filename', ''))[:200],
+        'results': _clean_results(data.get('results')),
     })
+    avg = data.get('avg_score')
+    avg = float(avg) if isinstance(avg, (int, float)) and not isinstance(avg, bool) else None
     conn = _db()
     try:
         cur = conn.execute(
             'INSERT INTO results(profile_id, ts, avg_score, status, detail) VALUES(?,?,?,?,?)',
             (pid, datetime.datetime.now().isoformat(timespec='seconds'),
-             data.get('avg_score'), data.get('status', ''), detail))
+             avg, str(data.get('status', ''))[:40], detail))
         conn.commit()
         rid = cur.lastrowid
     except sqlite3.IntegrityError:
@@ -304,7 +496,9 @@ async def save_result(data: dict):
     return {'id': rid}
 
 @app.get('/history')
-async def history(profile_id: int):
+def history(profile_id: int, x_profile_token: str | None = Header(None)):
+    denied = _authorize(profile_id, x_profile_token)
+    if denied: return denied
     conn = _db()
     rows = conn.execute(
         'SELECT id, ts, avg_score, status, detail FROM results '
@@ -326,64 +520,76 @@ async def index():
     return HTML_PAGE
 
 @app.post('/upload')
-async def upload(file: UploadFile = File(...)):
-    content = await file.read()
+def upload(file: UploadFile = File(...)):
+    content = file.file.read(MAX_UPLOAD_BYTES + 1)
+    if len(content) > MAX_UPLOAD_BYTES:
+        return JSONResponse({'error': 'File too large (limit %d MB)' % (MAX_UPLOAD_BYTES // 1048576)}, status_code=413)
+    name = file.filename or 'upload'
     try:
-        df, fs = _load_file(content, file.filename)
+        df, fs = _load_file(content, name)
     except Exception as e:
-        return JSONResponse({'error': str(e)}, status_code=400)
+        return JSONResponse({'error': str(e)[:120]}, status_code=400)
     if df is None or df.empty:
         return JSONResponse({'error': 'No numeric data'}, status_code=400)
     cols = _muscle_columns(df)
     if not cols:
         return JSONResponse({'error': 'No channels detected'}, status_code=400)
+    fs_use = float(fs) if fs else 1000.0
+    n_total = len(df)
+    max_n = int(MAX_SECONDS * fs_use)
     sid = uuid.uuid4().hex
-    # Store as serializable types
     _save_session(sid, {
-        'data': {c: df[c].tolist() for c in cols},
-        'fs': int(fs) if fs else 1000,
+        'data': {c: df[c].iloc[:max_n].tolist() for c in cols},
+        'fs': fs_use,
         'cols': cols,
-        'filename': file.filename,
+        'filename': name[:200],
     })
     return JSONResponse({
         'session': sid,
-        'filename': file.filename,
-        'fs': int(fs) if fs else 1000,
+        'filename': name[:200],
+        'fs': int(fs_use) if fs_use == int(fs_use) else round(fs_use, 2),
+        'fs_assumed': not fs,
         'cols': cols,
-        'duration': len(df) / (fs or 1000),
+        'duration': n_total / fs_use,
+        'truncated': n_total > max_n,
+        'max_seconds': MAX_SECONDS,
         'muscles': _match_columns(cols),
     })
 
 @app.post('/analyze')
 def analyze(data: dict):
-    print(f"ANALYZE called: session={data.get('session','?')[:8]}..., muscles={len(data.get('muscles',[]))}", flush=True)
+    # Plain def: FastAPI runs it in a worker thread, so the CWT work does not block other requests.
     try:
         sid = data.get('session')
         selected = data.get('muscles', [])
+        if not isinstance(selected, list): selected = []
         if not sid:
             return JSONResponse({'error': 'No session ID'}, status_code=400)
         st = _load_session(sid)
         if not st:
             return JSONResponse({'error': 'Session expired — please re-upload'}, status_code=404)
         results = {}
-        for req in selected:
-            col = req.get('column', '')
-            mid = req.get('id', col)
+        for req in selected[:64]:
+            if not isinstance(req, dict): continue
+            col = str(req.get('column', ''))
+            mid = str(req.get('id', col))
             if not col or col not in st['data']:
                 results[mid] = dict(status='grey', score=0, tip='Column not found')
                 continue
+            fs = float(st['fs'])
+            if fs < MIN_FS:
+                results[mid] = dict(status='grey', score=0, tip='Sampling rate too low (needs %d Hz or more)' % MIN_FS)
+                continue
             sig = np.array(st['data'][col], dtype=float)
-            fs = st['fs']
-            # Cap to 30 seconds
-            max_samples = int(30 * fs)
+            max_samples = int(MAX_SECONDS * fs)
             if len(sig) > max_samples:
                 sig = sig[:max_samples]
-            if np.isnan(sig).any() or np.isinf(sig).any() or np.std(sig) < 1e-10:
+            if len(sig) == 0 or np.isnan(sig).any() or np.isinf(sig).any() or np.std(sig) < 1e-10:
                 results[mid] = dict(status='grey', score=0, tip='Missing, invalid or flat data')
                 continue
             try:
-                Tx_fast, _, ssq_freqs = _run_fast(sig, fs, 1.0, 35.0, 1.0, 32)
-                result = _classify_fatigue(Tx_fast, ssq_freqs)
+                Tx_fast, _, ssq_freqs, fs_eff = _run_fast(sig, fs, 1.0, 35.0, 1.0, 32)
+                result = _classify_fatigue(Tx_fast, ssq_freqs, fs_eff=fs_eff)
                 bowen = run_bowen_pipeline(Tx_fast, ssq_freqs, mid, n_pad=0)
                 result['centroid'] = (round(float(bowen.phase_mean_centroid), 1)
                                       if not np.isnan(bowen.phase_mean_centroid) else None)
@@ -396,7 +602,7 @@ def analyze(data: dict):
                 results[mid] = dict(status='grey', score=0, tip=str(e)[:80])
         return dict(results=results)
     except Exception as e:
-        return dict(error=str(e), results={})
+        return dict(error=str(e)[:120], results={})
 
 # Full muscle names are checked before abbreviations so e.g. 'VASTUS LATERALIS'
 # matches VL instead of the accidental 'ST' inside it. Abbreviations only match
@@ -425,6 +631,8 @@ def _norm_col(s):
                   .replace('_', ' ').replace('-', ' ').replace('.', ' ')
                   .replace('(', ' ').replace(')', ' ').replace(',', ' ')).strip()
 
+_AMBIGUOUS = re.compile(r'GASTROC|DELTOID|BICEPS|QUAD|HAMSTRING|TIBIALIS|FOREARM')
+
 def _match_columns(cols):
     known = {m['id'].upper(): m for m in MUSCLES}
     # Longest aliases first so full names beat abbreviations
@@ -443,18 +651,23 @@ def _match_columns(cols):
                     hit = mid
                     break
             else:
+                # A bare muscle-group word (e.g. GASTROCNEMIUS) must not fall through to an
+                # abbreviation hidden in the same name, such as the ST in ST_Gastrocnemius.
+                if _AMBIGUOUS.search(cu):
+                    continue
                 # abbreviation: exact, whole token, or digit-anchored — never substring
                 if cu == alias or any(t == alias for t in cu.split()) or \
                    (cu.startswith(alias) and (len(cu) == len(alias) or cu[len(alias)].isdigit())) or \
                    (cu.endswith(alias) and cu[len(cu) - len(alias) - 1].isdigit()):
                     hit = mid
                     break
-        if hit is not None:
+        # A second channel for an already-assigned muscle (VL_L and VL_R) stays in the list
+        # as its own channel instead of being dropped.
+        if hit is not None and hit not in used:
             matched_cols.add(c)
-            if hit not in used:
-                matched.append(dict(id=hit, name=known[hit]['name'],
-                                    desc=known[hit]['desc'], column=c))
-                used.add(hit)
+            matched.append(dict(id=hit, name=known[hit]['name'],
+                                desc=known[hit]['desc'], column=c))
+            used.add(hit)
     colours = itertools.cycle(['#6750A4','#625B71','#9A25AE','#386A20',
                                 '#BA1A1A','#AA3300','#00696B','#4A4458'])
     for c in cols:
@@ -584,6 +797,8 @@ input[type=file]{display:none}
 .badge-green{background:rgba(0,230,118,0.1);color:var(--green);border-color:rgba(0,230,118,0.25)}
 .badge-amber{background:rgba(255,145,0,0.1);color:var(--amber);border-color:rgba(255,145,0,0.25)}
 .badge-red{background:rgba(239,68,68,0.1);color:var(--red);border-color:rgba(239,68,68,0.25)}
+:root[data-theme="light"] .bottom-nav{background:rgba(255,255,255,0.95)}
+.badge-grey{background:rgba(161,161,170,0.1);color:var(--text-dim);border-color:rgba(161,161,170,0.25)}
 .result-tip{font-size:12px;color:var(--text-dim);margin-top:4px}
 
 /* Trend chart */
@@ -1170,6 +1385,25 @@ input[type=file]{display:none}
 </script>
 
 <script>
+function esc(v) {
+  return String(v == null ? '' : v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function pfetch(url, opts) {
+  opts = opts || {};
+  opts.headers = Object.assign({}, opts.headers || {});
+  if (profile && profile.token) opts.headers['X-Profile-Token'] = profile.token;
+  return fetch(url, opts).then(r => {
+    if (r.status === 401 && profile && profile.token) {
+      profile.token = null;
+      try { localStorage.setItem('fast_profile', JSON.stringify(profile)); } catch(e) {}
+      toast('Session expired. Tap your profile and enter the PIN again.');
+    }
+    return r;
+  });
+}
+function saveProfileLocal() {
+  try { localStorage.setItem('fast_profile', JSON.stringify(profile)); } catch(e) {}
+}
 let sessionData = null;
 let muscles = [];
 let lastResults = null;
@@ -1243,7 +1477,9 @@ async function handleFile(file) {
     document.getElementById('upload-main-text').textContent = file.name;
     document.getElementById('file-info-section').classList.remove('hidden');
     document.getElementById('file-chip-name').textContent = file.name;
-    document.getElementById('file-chip-meta').textContent = data.duration.toFixed(0) + 's, ' + data.fs + ' Hz, ' + data.cols.length + ' channels';
+    document.getElementById('file-chip-meta').textContent = data.duration.toFixed(0) + 's, ' + data.fs + ' Hz' + (data.fs_assumed ? ' (assumed)' : '') + ', ' + data.cols.length + ' channels';
+    if (data.truncated) toast('Only the first ' + data.max_seconds + ' s of this recording are analysed.');
+    else if (data.fs_assumed) toast('No sampling rate found in the file. Assuming ' + data.fs + ' Hz.');
     buildMuscleGrid();
     return true;
   } catch(e) { toast('Upload failed: ' + e.message); return false; }
@@ -1270,7 +1506,7 @@ function buildMuscleGrid() {
   grid.innerHTML = '';
   muscles.forEach((m, i) => {
     const svg = muscleThumbSVG(m.id || m.column, m.colour || '#00E5FF');
-    grid.innerHTML += '<div class="muscle-card selected" data-id="' + (m.id || m.column) + '" data-col="' + m.column + '" onclick="toggleMuscle(this)"><div class="body-svg">' + svg + '</div><div style="flex:1"><div class="muscle-name">' + (m.id || m.column) + ' - ' + m.name + '</div><div class="muscle-desc">' + m.desc + '</div></div><div class="check-ring"></div></div>';
+    grid.innerHTML += '<div class="muscle-card selected" data-id="' + esc(m.id || m.column) + '" data-col="' + esc(m.column) + '" onclick="toggleMuscle(this)"><div class="body-svg">' + svg + '</div><div style="flex:1"><div class="muscle-name">' + esc(m.id || m.column) + ' - ' + esc(m.name) + '</div><div class="muscle-desc">' + esc(m.desc) + '</div></div><div class="check-ring"></div></div>';
   });
   document.getElementById('analyse-bar').style.display = 'flex';
   updateCount();
@@ -1412,7 +1648,7 @@ function showResults(selected) {
     const tip = r.tip||'';
     const thumbHex = status==='green'?'#00E676':status==='amber'?'#FF9100':status==='red'?'#ef4444':'#a1a1aa';
     const svg = muscleThumbSVG(m.id||m.column, thumbHex);
-    listHTML += '<div class="result-card"><div class="body-svg">' + svg + '</div><div style="flex:1 1 130px;min-width:0"><div class="muscle-name">' + (m.id||m.column) + ' - ' + m.name + '</div><div class="muscle-desc">' + m.desc + '</div><div class="result-tip">' + tip + '</div>' + (r.centroid != null ? '<div style="font-size:11px;color:#7d7d85;margin-top:3px">LOW centroid: ' + r.centroid + ' Hz (8–23 Hz)</div>' : '') + '</div><div class="result-score" style="color:' + color + '">' + score + '</div><span class="result-badge ' + badgeClass + '">' + badgeText + '</span></div>';
+    listHTML += '<div class="result-card"><div class="body-svg">' + svg + '</div><div style="flex:1 1 130px;min-width:0"><div class="muscle-name">' + esc(m.id||m.column) + ' - ' + esc(m.name) + '</div><div class="muscle-desc">' + esc(m.desc) + '</div><div class="result-tip">' + esc(tip) + '</div>' + (r.centroid != null ? '<div style="font-size:11px;color:#7d7d85;margin-top:3px">Low-band centroid: ' + esc(r.centroid) + ' Hz (8–23 Hz band)</div>' : '') + '</div><div class="result-score" style="color:' + color + '">' + score + '</div><span class="result-badge ' + badgeClass + '">' + badgeText + '</span></div>';
   });
   document.getElementById('results-list').innerHTML = listHTML;
 
@@ -1431,7 +1667,7 @@ function showResults(selected) {
     const m = selected[0];
     document.getElementById('la-muscle').textContent = (m.id||m.column) + ' - ' + m.name;
     document.getElementById('la-date').textContent = new Date().toLocaleDateString('en-US',{month:'short',day:'numeric'});
-    document.getElementById('la-result').textContent = (m.result||{}).status==='green'?'Low Fatigue':'Moderate';
+    document.getElementById('la-result').textContent = ({green:'Low Fatigue', amber:'Moderate', red:'High Fatigue'}[(m.result||{}).status] || 'No data');
   }
 
   const todayBar = document.getElementById('today-bar');
@@ -1550,7 +1786,7 @@ function buildMuscleMap(selected) {
     }
     const colorVar = status==='green'?'var(--green)':status==='amber'?'var(--amber)':status==='red'?'var(--red)':'var(--text-dim)';
     const label = status==='green'?'Recovered':status==='amber'?'Moderate fatigue':status==='red'?'Fatigued':'No data';
-    calloutRow.innerHTML += '<div class="callout"><span class="callout-dot" style="background:' + colorVar + '"></span><span>' + mid + ': <b>' + label + '</b></span></div>';
+    calloutRow.innerHTML += '<div class="callout"><span class="callout-dot" style="background:' + colorVar + '"></span><span>' + esc(mid) + ': <b>' + label + '</b></span></div>';
   });
 
   // Apply right-leg highlights: worst score per region drives the heat colour
@@ -1590,7 +1826,7 @@ async function loadProfileScreen() {
   let stats = null;
   if (profile) {
     try {
-      const resp = await fetch('/history?profile_id=' + profile.id);
+      const resp = await pfetch('/history?profile_id=' + profile.id);
       const data = await resp.json();
       const h = data.history || [];
       const scores = h.map(x => x.avg_score).filter(s => s != null);
@@ -1612,8 +1848,8 @@ async function loadProfileScreen() {
     }
     cur.innerHTML = '<div class="card fade-up"><div class="card-header">CURRENT PROFILE</div>' +
       '<div class="train-hero">' +
-      '<span class="profile-avatar large">' + profile.name.charAt(0).toUpperCase() + '</span>' +
-      '<div class="train-hero-text"><div class="train-verdict" style="color:var(--text)">' + profile.name + '</div>' +
+      '<span class="profile-avatar large">' + esc(profile.name.charAt(0).toUpperCase()) + '</span>' +
+      '<div class="train-hero-text"><div class="train-verdict" style="color:var(--text)">' + esc(profile.name) + '</div>' +
       '<div class="train-sub">' + parts.join(' · ') + '</div></div>' +
       '<span class="profile-active">ACTIVE</span></div></div>';
   } else {
@@ -1633,18 +1869,18 @@ async function loadProfiles() {
     profileList.forEach(p => {
       const isActive = profile && profile.id === p.id;
       if (deleteTarget === p.id) {
-        list.innerHTML += '<div class="profile-row" style="flex-wrap:wrap"><div style="flex:1 1 100%;font-size:12px;color:var(--red);margin-bottom:8px">Delete ' + p.name + '? This removes their saved results.</div>' +
+        list.innerHTML += '<div class="profile-row" style="flex-wrap:wrap"><div style="flex:1 1 100%;font-size:12px;color:var(--red);margin-bottom:8px">Delete ' + esc(p.name) + '? This removes their saved results.</div>' +
           '<div style="display:flex;gap:8px;margin-left:auto">' +
           '<button class="btn-outline" style="padding:6px 14px;font-size:11px" onclick="event.stopPropagation();cancelDelete()">Cancel</button>' +
           '<button class="btn-primary" style="width:auto;padding:6px 14px;font-size:11px;background:var(--red);color:#fff" onclick="event.stopPropagation();confirmDelete(' + p.id + ')">Delete</button></div></div>';
         return;
       }
       list.innerHTML += '<div class="profile-row"' + (isActive ? ' style="border-color:var(--cyan)"' : '') + ' onclick="onProfileClick(' + p.id + ')">' +
-        '<span class="profile-avatar">' + p.name.charAt(0).toUpperCase() + '</span>' +
-        '<span class="profile-row-name">' + p.name + '</span>' +
+        '<span class="profile-avatar">' + esc(p.name.charAt(0).toUpperCase()) + '</span>' +
+        '<span class="profile-row-name">' + esc(p.name) + '</span>' +
         (p.has_pin ? '<span style="font-size:10px;color:var(--text-faint)">PIN</span>' : '') +
         (isActive ? '<span class="profile-active">ACTIVE</span>' : '') +
-        '<button class="profile-del" onclick="event.stopPropagation();askDeleteProfile(' + p.id + ')" aria-label="Delete ' + p.name + '"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6"/></svg></button></div>';
+        '<button class="profile-del" onclick="event.stopPropagation();askDeleteProfile(' + p.id + ')" aria-label="Delete ' + esc(p.name) + '"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6"/></svg></button></div>';
     });
     if (!profileList.length) {
       list.innerHTML = '<div style="font-size:13px;color:var(--text-faint);padding:8px 0">No profiles yet — add one below.</div>';
@@ -1658,7 +1894,13 @@ function cancelDelete() { deleteTarget = null; loadProfiles(); }
 async function confirmDelete(id) {
   deleteTarget = null;
   try {
-    const resp = await fetch('/profiles/' + id, {method: 'DELETE'});
+    const p = profileList.find(x => x.id === id);
+    if (p && p.has_pin && !(profile && profile.id === id && profile.token)) {
+      toast('Select this profile and enter its PIN first, then delete it.');
+      await loadProfiles(); return;
+    }
+    const tok = (profile && profile.id === id) ? profile.token : null;
+    const resp = await fetch('/profiles/' + id, {method: 'DELETE', headers: tok ? {'X-Profile-Token': tok} : {}});
     if (!resp.ok) { toast('Could not delete profile.'); return; }
     if (profile && profile.id === id) {
       profile = null;
@@ -1674,8 +1916,8 @@ async function confirmDelete(id) {
 async function selectProfile(id) {
   const p = profileList.find(x => x.id === id);
   if (!p) return;
-  profile = {id: p.id, name: p.name};
-  localStorage.setItem('fast_profile', JSON.stringify(profile));
+  profile = {id: p.id, name: p.name, token: null};
+  saveProfileLocal();
   updateProfileChip();
   loadProfileScreen();
   toast('Profile: ' + p.name);
@@ -1707,8 +1949,8 @@ async function confirmPin() {
   if (data.error) { toast(data.error); input.value = ''; input.focus(); return; }
   document.getElementById('pin-box').classList.add('hidden');
   pinTarget = null;
-  profile = {id: data.id, name: data.name};
-  localStorage.setItem('fast_profile', JSON.stringify(profile));
+  profile = {id: data.id, name: data.name, token: data.token || null};
+  saveProfileLocal();
   updateProfileChip();
   loadProfileScreen();
   toast('Profile: ' + data.name);
@@ -1726,8 +1968,8 @@ async function createProfile() {
   if (data.error) { toast(data.error); return; }
   document.getElementById('new-profile-name').value = '';
   document.getElementById('new-profile-pin').value = '';
-  profile = {id: data.id, name: data.name};
-  localStorage.setItem('fast_profile', JSON.stringify(profile));
+  profile = {id: data.id, name: data.name, token: data.token || null};
+  saveProfileLocal();
   updateProfileChip();
   await loadProfileScreen();
   toast('Profile added: ' + data.name);
@@ -1749,7 +1991,7 @@ async function saveAssessment(avgScore, overallStatus) {
     centroid: (m.result || {}).centroid
   }));
   try {
-    const resp = await fetch('/save', {
+    const resp = await pfetch('/save', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({
         profile_id: profile.id,
@@ -1758,8 +2000,9 @@ async function saveAssessment(avgScore, overallStatus) {
       })
     });
     const data = await resp.json();
-    if (!data.error) toast('Saved to ' + profile.name);
-  } catch(e) {}
+    if (!resp.ok || data.error) toast(data.error || 'Could not save this result.');
+    else toast('Saved to ' + profile.name);
+  } catch(e) { toast('Could not save this result.'); }
 }
 
 async function loadHistory() {
@@ -1775,7 +2018,7 @@ async function loadHistory() {
   list.innerHTML = '<div class="card skeleton-card"><div class="skeleton skeleton-line"></div><div class="skeleton skeleton-line short"></div><div class="skeleton-chips"><div class="skeleton skeleton-chip"></div><div class="skeleton skeleton-chip"></div><div class="skeleton skeleton-chip"></div></div></div>' +
     '<div class="card skeleton-card"><div class="skeleton skeleton-line"></div><div class="skeleton skeleton-line short"></div><div class="skeleton-chips"><div class="skeleton skeleton-chip"></div><div class="skeleton skeleton-chip"></div></div></div>';
   try {
-    const resp = await fetch('/history?profile_id=' + profile.id);
+    const resp = await pfetch('/history?profile_id=' + profile.id);
     const data = await resp.json();
     historyData = data.history || [];
     historyFilter = 'all';
@@ -1804,15 +2047,15 @@ function trendSVG(items) {
     x: (n === 1 ? W / 2 : PAD + i * (W - 2 * PAD) / (n - 1)).toFixed(1),
     y: yFor(it.score), it
   }));
-  const grid = '<line x1="' + PAD + '" y1="' + yFor(70) + '" x2="' + (W - PAD) + '" y2="' + yFor(70) + '" stroke="rgba(255,255,255,0.08)" stroke-dasharray="3 3"/>' +
-               '<line x1="' + PAD + '" y1="' + yFor(40) + '" x2="' + (W - PAD) + '" y2="' + yFor(40) + '" stroke="rgba(255,255,255,0.08)" stroke-dasharray="3 3"/>';
+  const grid = '<line x1="' + PAD + '" y1="' + yFor(70) + '" x2="' + (W - PAD) + '" y2="' + yFor(70) + '" stroke="var(--border)" stroke-dasharray="3 3"/>' +
+               '<line x1="' + PAD + '" y1="' + yFor(40) + '" x2="' + (W - PAD) + '" y2="' + yFor(40) + '" stroke="var(--border)" stroke-dasharray="3 3"/>';
   let body = grid;
   if (n > 1) {
     body += '<polyline points="' + pts.map(p => p.x + ',' + p.y).join(' ') + '" fill="none" stroke="var(--cyan)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" opacity="0.85"/>';
   }
   body += pts.map(p => {
     const c = p.it.statusClass === 'green' ? 'var(--green)' : p.it.statusClass === 'amber' ? 'var(--amber)' : 'var(--red)';
-    return '<circle cx="' + p.x + '" cy="' + p.y + '" r="4" fill="#18181b" stroke="' + c + '" stroke-width="2.5"/>';
+    return '<circle cx="' + p.x + '" cy="' + p.y + '" r="4" fill="var(--card)" stroke="' + c + '" stroke-width="2.5"/>';
   }).join('');
   if (n > 1) {
     body += '<text x="' + pts[0].x + '" y="' + (H - 2) + '" text-anchor="middle" font-size="9" fill="#7d7d85">' + pts[0].it.label + '</text>' +
@@ -1881,12 +2124,12 @@ function renderHistoryList() {
       if (r.status === 'green') c = 'var(--green)';
       else if (r.status === 'amber') c = 'var(--amber)';
       else if (r.status === 'red') c = 'var(--red)';
-      chips += '<span class="hist-chip"><span class="tl-dot" style="background:' + c + '"></span>' + r.id + '</span>';
+      chips += '<span class="hist-chip"><span class="tl-dot" style="background:' + c + '"></span>' + esc(r.id) + '</span>';
     });
     list.innerHTML += '<div class="card hist-card-click" onclick="openHistoryDetail(' + item.id + ')"><div class="hist-head">' +
       '<span class="hist-score" style="color:' + color + '">' + (item.avg_score != null ? Math.round(item.avg_score) + '%' : '—') + '</span>' +
-      '<div style="flex:1"><div class="hist-date">' + dateStr + '</div><div class="hist-file">' + (item.filename || '') + '</div></div>' +
-      '<span class="hist-status" style="color:' + color + '">' + st + '</span>' +
+      '<div style="flex:1"><div class="hist-date">' + dateStr + '</div><div class="hist-file">' + esc(item.filename || '') + '</div></div>' +
+      '<span class="hist-status" style="color:' + color + '">' + esc(st) + '</span>' +
       '<span class="hist-chevron">›</span></div>' +
       '<div class="hist-chips">' + chips + '</div></div>';
   });
@@ -1907,12 +2150,12 @@ function openHistoryDetail(id) {
     if (r.status === 'green') c = 'var(--green)';
     else if (r.status === 'amber') c = 'var(--amber)';
     else if (r.status === 'red') c = 'var(--red)';
-    return '<div class="hdetail-row"><span class="tl-dot" style="background:' + c + '"></span><span class="hdetail-name">' + (r.id || '') + ' - ' + (r.name || '') + '</span><span class="hdetail-score" style="color:' + c + '">' + (r.score != null ? r.score : '—') + '</span></div>';
+    return '<div class="hdetail-row"><span class="tl-dot" style="background:' + c + '"></span><span class="hdetail-name">' + esc(r.id || '') + ' - ' + esc(r.name || '') + '</span><span class="hdetail-score" style="color:' + c + '">' + (r.score != null ? r.score : '—') + '</span></div>';
   }).join('');
   document.getElementById('history-detail').innerHTML =
     '<div class="hdetail-head"><span class="hdetail-score-big" style="color:' + color + '">' + (item.avg_score != null ? Math.round(item.avg_score) + '%' : '—') + '</span>' +
-    '<div class="hdetail-meta"><div>' + dateStr + '</div><div class="hdetail-file">' + (item.filename || '') + '</div></div>' +
-    '<span class="hist-status" style="color:' + color + '">' + (item.status || '').toUpperCase() + '</span></div>' +
+    '<div class="hdetail-meta"><div>' + dateStr + '</div><div class="hdetail-file">' + esc(item.filename || '') + '</div></div>' +
+    '<span class="hist-status" style="color:' + color + '">' + esc((item.status || '').toUpperCase()) + '</span></div>' +
     '<div class="sheet-divider"></div>' +
     (rows || '<div style="font-size:12px;color:var(--text-dim)">No muscle details saved.</div>');
   document.getElementById('history-sheet').classList.remove('hidden');
@@ -1931,7 +2174,7 @@ async function updateResultsTrend() {
     return;
   }
   try {
-    const resp = await fetch('/history?profile_id=' + profile.id);
+    const resp = await pfetch('/history?profile_id=' + profile.id);
     const data = await resp.json();
     const h = (data.history || []).filter(x => x.avg_score != null).reverse();
     if (!h.length) {
@@ -1961,7 +2204,7 @@ async function loadTrain() {
   let history = [];
   if (profile) {
     try {
-      const resp = await fetch('/history?profile_id=' + profile.id);
+      const resp = await pfetch('/history?profile_id=' + profile.id);
       const data = await resp.json();
       history = data.history || [];
       latest = history[0] || null;
@@ -2008,7 +2251,7 @@ async function loadTrain() {
   heroBox.innerHTML = '<div class="card fade-up"><div class="card-header">' + "TODAY'S CALL" + '</div>' +
     '<div class="train-hero">' +
     '<div class="train-gauge"><svg width="104" height="104" viewBox="0 0 104 104">' +
-    '<circle cx="52" cy="52" r="44" fill="none" stroke="rgba(255,255,255,0.1)" stroke-width="8"/>' +
+    '<circle cx="52" cy="52" r="44" fill="none" stroke="var(--ring-track)" stroke-width="8"/>' +
     '<circle cx="52" cy="52" r="44" fill="none" stroke="' + vcolor + '" stroke-width="8" stroke-linecap="round" stroke-dasharray="' + circ.toFixed(1) + '" stroke-dashoffset="' + off.toFixed(1) + '" transform="rotate(-90 52 52)"/>' +
     '</svg><div class="train-gauge-val" style="color:' + vcolor + '">' + score + '%</div></div>' +
     '<div class="train-hero-text"><div class="train-verdict" style="color:' + vcolor + '">' + verdict + '</div>' +
@@ -2022,7 +2265,7 @@ async function loadTrain() {
   const amberM = results.filter(r => r.status === 'amber');
   if (results.length) {
     let rows = '';
-    const rowFor = (r, c, tag) => '<div class="hdetail-row"><span class="tl-dot" style="background:' + c + '"></span><span class="hdetail-name">' + (r.id || '') + ' - ' + (r.name || '') + '</span><span class="hdetail-score" style="color:' + c + ';font-size:11px;font-weight:600">' + tag + '</span></div>';
+    const rowFor = (r, c, tag) => '<div class="hdetail-row"><span class="tl-dot" style="background:' + c + '"></span><span class="hdetail-name">' + esc(r.id || '') + ' - ' + esc(r.name || '') + '</span><span class="hdetail-score" style="color:' + c + ';font-size:11px;font-weight:600">' + tag + '</span></div>';
     if (redM.length) {
       rows = redM.map(r => rowFor(r, 'var(--red)', 'NEEDS REST')).join('');
       rows += amberM.map(r => rowFor(r, 'var(--amber)', 'GO EASY')).join('');
@@ -2098,4 +2341,4 @@ document.getElementById('pin-input').addEventListener('keydown', e => { if (e.ke
 </html>'''
 
 if __name__ == '__main__':
-    uvicorn.run(app, host='0.0.0.0', port=8501)
+    uvicorn.run(app, host=os.environ.get('FAST_HOST', '127.0.0.1'), port=int(os.environ.get('FAST_PORT', '8501')))

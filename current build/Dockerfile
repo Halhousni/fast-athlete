@@ -21,6 +21,7 @@ COPY bowen_centroid.py .
 COPY demo.mp4 .
 COPY demo_recording.csv .
 
+ENV FAST_HOST=0.0.0.0
 EXPOSE 8501
 
 CMD ["python3", "app.py"]
