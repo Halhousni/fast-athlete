@@ -71,7 +71,11 @@ app_nicegui.py  (517 lines)
 
 ## Deployment pipeline
 
-See PIPELINE.md. Summary: `git push deploy` → post-receive hook → `docker compose up --build -d`. App at http://<server-ip>:8501.
+See PIPELINE.md. Summary: `git push deploy` → post-receive hook → `docker compose up --build -d`. The app serves on port 8501.
+
+**Note — this file describes an earlier build.** The structure above is the NiceGUI
+version. The current app is FastAPI serving one embedded HTML page. See README.md
+for the current layout.
 
 ## Known limitations
 
