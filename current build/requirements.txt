@@ -1,18 +1,7 @@
-# Pinned to the versions the live container runs. Checked 2026-10-09.
-# The fatigue method is under study, so a rebuild should reproduce the same
-# numbers rather than pull whatever is newest on PyPI.
-
-fastapi==0.143.0
-uvicorn==0.54.0
-numpy==2.5.3
-scipy==1.18.1
-ssqueezepy==0.6.6
-pandas==3.0.6
-
-# Not imported anywhere. fastapi needs it to parse multipart file uploads.
-python-multipart==0.0.32
-
-# Reached through ssqueezepy. Pinned explicitly because ssq_cwt runs through
-# numba, and a numba or llvmlite bump can move the output.
-numba==0.68.0
-llvmlite==0.50.0
+fastapi
+uvicorn
+python-multipart
+numpy
+scipy
+ssqueezepy
+pandas
