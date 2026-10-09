@@ -1,0 +1,5 @@
+# Keep the demo assets from dominating language stats, diffs and reviews
+"current build/demo_recording.csv" linguist-documentation
+"current build/demo.mp4"           binary
+*.png                              binary
+*.pdf                              binary
