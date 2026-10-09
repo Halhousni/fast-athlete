@@ -1,24 +1,18 @@
+# Python
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
-*.egg-info/
-dist/
-build/
-*.log
-
-# Nextcloud sync artifacts
-*conflicted copy*
+*.py[cod]
 
 # Local runtime data
-/data/
 fast.db
+/data/
 .venv/
 venv/
 
-# docker compose environment, holds the site specific bind address
+# Docker compose environment, holds the site specific bind address
 .env
-!.env.example
 
-# local deployment notes, kept out of the repository
+# Nextcloud sync artifacts, from before the repo left the sync root
+*conflicted copy*
+
+# Local deployment notes, kept out of the repository
 PIPELINE.md
