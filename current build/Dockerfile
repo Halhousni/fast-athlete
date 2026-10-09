@@ -3,8 +3,8 @@
 # ============================================================
 # The FAST pipeline runs on CPU. ssqueezepy is called without a backend
 # argument, so it takes the numpy/scipy path, and its own dependencies are
-# numba, numpy and scipy. No GPU runtime is imported, so the image
-# needs no driver packages and the container needs no device pass-through.
+# numba, numpy and scipy. No GPU driver packages are needed and the container
+# requires no device pass-through.
 # ============================================================
 
 FROM python:3.12-slim
