@@ -36,7 +36,6 @@ import numpy as np
 import wsstpy
 from scipy.signal import resample_poly
 
-import bowen_centroid
 
 TARGET_FS = 200.0
 MAX_WINDOW_S = 30.0        # a longer recording is cut to its first 30 s
@@ -140,6 +139,140 @@ _TIPS = {
 }
 
 
+# ── fatiguability from MDF and RMS ──────────────────────────────────────────
+# Zhao, Charoonsrisawad, Ichiyama & Chakrabarty (2025), "A non-invasive,
+# quantitative method for detection of muscle fatigue and neural mechanism of
+# compensation during muscle fatigue": fatigue is read from the change in median
+# frequency and the change in RMS, not from where the spectrum sits.
+#
+#   low fatigue     RMS change < 10 % and MDF change < 5 %
+#   medium fatigue  RMS change > 10 % and MDF change >  5 %  (MDF falling)
+#   high fatigue    the same, with the trend consistent over the recording
+#
+# The slope thresholds in the poster (K_RMS >= 0.05, K_MDF <= -0.05) are quoted
+# in the paper's own units, which are not defined there, so slopes are reported
+# in percent per second and used only to say whether the trend is consistent.
+
+EPOCH_S = 0.5
+REFERENCE_S = 5.0
+RMS_LIMIT_PCT = 10.0
+MDF_LIMIT_PCT = 5.0
+
+LEVEL_TIPS = {
+    'low': 'Fatigue is not detectable in this recording',
+    'medium': 'Some fatigue: the spectrum fell and the amplitude rose',
+    'high': 'Fatigue is clear and grows through the recording',
+    'mixed': 'One indicator moved without the other',
+}
+
+
+def _epochs(n: int, fs: float) -> list[tuple[int, int]]:
+    step = max(1, int(round(EPOCH_S * fs)))
+    return [(start, min(start + step, n)) for start in range(0, n, step)]
+
+
+def median_frequency_series(Tx: np.ndarray, freqs: np.ndarray, fs: float) -> np.ndarray:
+    """Median frequency per epoch, from the transform's frequency marginal."""
+    power = np.abs(Tx) ** 2
+    out = []
+    for start, stop in _epochs(power.shape[1], fs):
+        spectrum = power[:, start:stop].mean(axis=1)
+        total = float(spectrum.sum())
+        if not np.isfinite(total) or total <= 0:
+            out.append(np.nan)
+            continue
+        cumulative = np.cumsum(spectrum) / total
+        index = min(int(np.searchsorted(cumulative, 0.5)), len(freqs) - 1)
+        if index == 0:
+            out.append(float(freqs[0]))
+            continue
+        low, high = cumulative[index - 1], cumulative[index]
+        frac = 0.0 if high == low else (0.5 - low) / (high - low)
+        out.append(float(freqs[index - 1] + frac * (freqs[index] - freqs[index - 1])))
+    return np.asarray(out, dtype=float)
+
+
+def rms_series(sig: np.ndarray, fs: float) -> np.ndarray:
+    """Root mean square per epoch, from the signal itself."""
+    step = max(1, int(round(EPOCH_S * fs)))
+    out = [float(np.sqrt(np.mean(sig[i:i + step] ** 2)))
+           for i in range(0, len(sig) - step + 1, step)]
+    return np.asarray(out, dtype=float)
+
+
+def _slope(values: np.ndarray, fs: float) -> float:
+    """Percent change per second, from a straight line through the series."""
+    if len(values) < 2 or values[0] <= 0:
+        return 0.0
+    t = np.arange(len(values)) * EPOCH_S
+    pct = values / values[0] * 100.0
+    return float(np.polyfit(t, pct, 1)[0])
+
+
+def fatiguability(sig: np.ndarray, Tx: np.ndarray, freqs: np.ndarray,
+                  fs: float) -> dict:
+    """Change in MDF and RMS from the start of the recording to its end."""
+    mdf = median_frequency_series(Tx, freqs, fs)
+    rms = rms_series(sig, fs)
+    n = min(len(mdf), len(rms))
+    mdf, rms = mdf[:n], rms[:n]
+    ok = np.isfinite(mdf) & np.isfinite(rms) & (rms > 0) & (mdf > 0)
+    if ok.sum() < 6:
+        return dict(level='grey', status='grey', score=0, r=None,
+                    tip='Not enough clean signal to measure a change')
+
+    window = max(2, int(round(REFERENCE_S / EPOCH_S)))
+    start_ok = ok[:window]
+    end_ok = ok[max(0, n - window):]
+    if start_ok.sum() < 2 or end_ok.sum() < 2:
+        return dict(level='grey', status='grey', score=0, r=None,
+                    tip='Not enough clean signal at the start or the end')
+
+    mdf0 = float(np.median(mdf[:window][start_ok]))
+    mdf1 = float(np.median(mdf[max(0, n - window):][end_ok]))
+    rms0 = float(np.median(rms[:window][start_ok]))
+    rms1 = float(np.median(rms[max(0, n - window):][end_ok]))
+    if mdf0 <= 0 or rms0 <= 0:
+        return dict(level='grey', status='grey', score=0, r=None,
+                    tip='Could not read a starting value')
+
+    delta_mdf = (mdf1 - mdf0) / mdf0 * 100.0
+    delta_rms = (rms1 - rms0) / rms0 * 100.0
+
+    # One number, r, is how far the muscle has moved past the two thresholds.
+    # Both count: the method reads fatigue from the pair, so a frequency drop
+    # with no amplitude compensation is half the evidence, not all of it.
+    r = max(0.0, (delta_rms / RMS_LIMIT_PCT - delta_mdf / MDF_LIMIT_PCT) / 2.0)
+    if r <= 1.0:
+        score = 100.0 - 30.0 * r
+    elif r <= 2.0:
+        score = 70.0 - 30.0 * (r - 1.0)
+    else:
+        score = 40.0 - 40.0 * min(1.0, (r - 2.0) / 2.0)
+    score = int(max(0, min(100, round(score))))
+
+    moved = (delta_rms > RMS_LIMIT_PCT) and (delta_mdf < -MDF_LIMIT_PCT)
+    if r <= 1.0:
+        level = 'low'
+    elif moved:
+        level = 'high' if r > 2.0 else 'medium'
+    else:
+        level = 'mixed'
+    status = status_from_score(score)
+
+    k_rms = _slope(rms[ok], fs)
+    k_mdf = _slope(mdf[ok], fs)
+    consistent = ((k_rms > 0) == (delta_rms > 0)) and ((k_mdf < 0) == (delta_mdf < 0))
+
+    return dict(level=level, status=status, score=score, r=round(r, 2),
+                mdf_start=round(mdf0, 1), mdf_end=round(mdf1, 1),
+                rms_start=round(rms0, 4), rms_end=round(rms1, 4),
+                delta_mdf=round(delta_mdf, 1), delta_rms=round(delta_rms, 1),
+                k_mdf=round(k_mdf, 3), k_rms=round(k_rms, 3),
+                consistent=bool(consistent),
+                tip=LEVEL_TIPS['high' if level == 'high' and consistent else level])
+
+
 def classify(Tx: np.ndarray, freqs: np.ndarray, fs: float) -> dict:
     """NFI, score and traffic light for one masked transform."""
     mif = mean_instantaneous_frequency(Tx, freqs)
@@ -192,13 +325,21 @@ def analyse_channel(sig: np.ndarray, fs: float, muscle_id: str) -> dict:
     cut = sig[:int(round(MAX_WINDOW_S * fs))]
     resampled, true_fs = resample_to_200(cut, fs)
     Tx, freqs = transform(resampled, true_fs)
-    result = classify(Tx, freqs, true_fs)
 
-    bowen = bowen_centroid.run_bowen_pipeline(Tx, freqs, muscle_id, n_pad=0)
-    for key, value in (('centroid', bowen.phase_mean_centroid),
-                       ('centroid_early', bowen.early_centroid),
-                       ('centroid_late', bowen.late_centroid)):
-        result[key] = round(float(value), 1) if np.isfinite(value) else None
+    # The duration and validity guard, and the mean-frequency fall that used to
+    # be the whole verdict.
+    result = dict(classify(Tx, freqs, true_fs))
+    if result['status'] != 'grey':
+        fatigue = fatiguability(resampled, Tx, freqs, true_fs)
+        if fatigue['status'] != 'grey':
+            # The call comes from MDF and RMS now, not from the mean frequency.
+            result['status'] = fatigue['status']
+            result['score'] = fatigue['score']
+            result['tip'] = fatigue['tip']
+        for key in ('level', 'r', 'mdf_start', 'mdf_end', 'rms_start', 'rms_end',
+                    'delta_mdf', 'delta_rms', 'k_mdf', 'k_rms', 'consistent'):
+            if key in fatigue:
+                result[key] = fatigue[key]
     result['analysed_seconds'] = round(len(cut) / fs, 1)
     return result
 

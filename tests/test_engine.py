@@ -106,11 +106,18 @@ def test_missing_samples_are_rejected_before_the_transform():
         engine.analyse_channel(sig, 200.0, 'VL')
 
 
-def test_analyse_channel_returns_centroid_and_window():
+def test_analyse_channel_reports_mdf_and_rms():
+    """The indices the method reads: median frequency and amplitude per epoch."""
     sig = tone(20.0, 1000.0, seconds=45.0)
     result = engine.analyse_channel(sig, 1000.0, 'VL')
     assert result['analysed_seconds'] == pytest.approx(30.0, abs=0.1)
-    assert result['centroid'] == pytest.approx(20.0, abs=1.0)
+    # A 20 Hz tone has its median frequency at 20 Hz.
+    assert result['mdf_start'] == pytest.approx(20.0, abs=2.5)
+    assert result['delta_mdf'] == pytest.approx(0.0, abs=5.0)
+    assert result['delta_rms'] == pytest.approx(0.0, abs=10.0)
+    assert result['level'] == 'low'
+    # The LOW centroid is not computed any more: it carries no fatigue direction.
+    assert 'centroid' not in result
 
 
 # ── the verdict itself ───────────────────────────────────────────────────────
@@ -178,3 +185,11 @@ def test_the_bundled_demo_gives_the_designed_verdict():
     expected = {'VL': 'green', 'VM': 'green', 'RF': 'green', 'TA': 'green',
                 'BF': 'amber', 'ST': 'amber', 'GM': 'red', 'GL': 'red'}
     assert {k: v['status'] for k, v in got.items()} == expected
+    # ... and the classes behind the colours.
+    levels = {k: v['level'] for k, v in got.items()}
+    assert levels == {'VL': 'low', 'VM': 'low', 'RF': 'low', 'TA': 'low',
+                      'BF': 'medium', 'ST': 'medium', 'GM': 'high', 'GL': 'high'}
+    # Fatigued channels lost frequency and gained amplitude, as the method expects.
+    for muscle in ('BF', 'GM'):
+        assert got[muscle]['delta_mdf'] < -5
+        assert got[muscle]['delta_rms'] > 10
