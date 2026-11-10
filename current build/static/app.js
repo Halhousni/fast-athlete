@@ -553,6 +553,215 @@ async function saveIfPossible() {
 }
 
 
+
+// ── the strip ───────────────────────────────────────────────────────────────
+// A time-frequency plane of one real recording, coloured through a single-hue
+// ramp, with the median-frequency trace and its threshold drawn over it. The
+// picture is the measurement: brightness is amplitude, the ridge is frequency,
+// and the two together are what the method reads.
+const STRIP_RAMP = [
+  [0.00, [22, 22, 24]],     // #161618, the card ground
+  [0.20, [14, 42, 48]],
+  [0.45, [11, 92, 104]],
+  [0.70, [18, 169, 184]],
+  [0.88, [22, 224, 240]],   // the identity cyan
+  [1.00, [217, 252, 255]],
+];
+
+function rampColour(t) {
+  const v = Math.max(0, Math.min(1, t));
+  for (let i = 1; i < STRIP_RAMP.length; i += 1) {
+    const [pos, rgb] = STRIP_RAMP[i];
+    if (v <= pos) {
+      const [prevPos, prevRgb] = STRIP_RAMP[i - 1];
+      const k = (v - prevPos) / (pos - prevPos || 1);
+      return prevRgb.map((c, n) => Math.round(c + (rgb[n] - c) * k));
+    }
+  }
+  return STRIP_RAMP[STRIP_RAMP.length - 1][1];
+}
+
+let stripData = null;
+async function loadStrip() {
+  if (stripData) return stripData;
+  // Revalidates with the ETag: cheap, and a regenerated strip is picked up.
+  const response = await fetch('/static/demo-strip.json', { cache: 'no-cache' });
+  if (!response.ok) throw new Error('strip unavailable');
+  stripData = await response.json();
+  stripData.bytes = Uint8Array.from(atob(stripData.grid), (c) => c.charCodeAt(0));
+  return stripData;
+}
+
+function drawStrip(canvas, data) {
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const cssW = canvas.parentElement.clientWidth || 900;
+  const cssH = Math.round(Math.min(380, Math.max(240, cssW * 0.30)));
+  canvas.width = Math.round(cssW * dpr);
+  canvas.height = Math.round(cssH * dpr);
+  canvas.style.width = '100%';
+  canvas.style.height = `${cssH}px`;
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cssW, cssH);
+
+  const css = getComputedStyle(document.documentElement);
+  const col = (name) => css.getPropertyValue(name).trim() || '#888';
+  const mono = '11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+  const sans = '11px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+
+  const pad = { l: cssW < 520 ? 8 : 44, r: 12, t: 10, b: 22 };
+  const plot = { x: pad.l, y: pad.t, w: cssW - pad.l - pad.r, h: cssH - pad.t - pad.b };
+  const { cols, rows, f0, f1 } = data;
+
+  // The plane, drawn small and scaled up with smoothing.
+  const off = document.createElement('canvas');
+  off.width = cols; off.height = rows;
+  const offCtx = off.getContext('2d');
+  const image = offCtx.createImageData(cols, rows);
+  for (let i = 0; i < cols * rows; i += 1) {
+    const v = data.bytes[i] / 255;
+    const [r, g, b] = rampColour(v);
+    const o = i * 4;
+    image.data[o] = r; image.data[o + 1] = g; image.data[o + 2] = b; image.data[o + 3] = 255;
+  }
+  offCtx.putImageData(image, 0, 0);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  // Row 0 is the lowest frequency; the canvas draws top down.
+  for (let i = 0; i < rows; i += 1) {
+    const srcRow = rows - 1 - i;
+    const y = plot.y + (i / rows) * plot.h;
+    const h = plot.h / rows + 0.5;
+    ctx.drawImage(off, 0, srcRow, cols, 1, plot.x, y, plot.w, h);
+  }
+
+  const frac = (f) => 1 - (f - f0) / (f1 - f0);
+  const xAt = (t) => plot.x + (t / data.seconds) * plot.w;
+
+  // Baseline window.
+  const baseW = xAt(data.baseline_s) - plot.x;
+  ctx.fillStyle = 'rgba(255,255,255,.05)';
+  ctx.fillRect(plot.x, plot.y, baseW, plot.h);
+  ctx.fillStyle = col('--accent');
+  ctx.globalAlpha = 0.55;
+  ctx.fillRect(plot.x, plot.y, baseW, 2);
+  ctx.globalAlpha = 1;
+
+  // Frequency gridlines.
+  ctx.strokeStyle = 'rgba(255,255,255,.06)';
+  ctx.lineWidth = 1;
+  for (const hz of [10, 20, 30]) {
+    const gy = plot.y + frac(hz) * plot.h;
+    ctx.beginPath(); ctx.moveTo(plot.x, gy); ctx.lineTo(plot.x + plot.w, gy); ctx.stroke();
+  }
+
+  // The median-frequency trace and its threshold.
+  const valid = data.mdf.filter((v) => Number.isFinite(v));
+  if (valid.length > 4) {
+    const base = valid[0];
+    const limit = base * 0.95;
+    const limitY = plot.y + frac(limit) * plot.h;
+    ctx.save();
+    ctx.setLineDash([4, 4]);
+    ctx.strokeStyle = col('--warn');
+    ctx.globalAlpha = 0.75;
+    ctx.beginPath();
+    ctx.moveTo(xAt(data.baseline_s), limitY);
+    ctx.lineTo(plot.x + plot.w, limitY);
+    ctx.stroke();
+    ctx.restore();
+
+    ctx.lineWidth = 3.5;
+    ctx.strokeStyle = 'rgba(13,13,15,.65)';
+    ctx.beginPath();
+    data.mdf.forEach((f, i) => {
+      if (!Number.isFinite(f)) return;
+      const x = xAt((i + 0.5) * (data.seconds / cols));
+      const y = plot.y + frac(f) * plot.h;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+    ctx.lineWidth = 1.75;
+    ctx.strokeStyle = '#F2F4F5';
+    ctx.beginPath();
+    data.mdf.forEach((f, i) => {
+      if (!Number.isFinite(f)) return;
+      const x = xAt((i + 0.5) * (data.seconds / cols));
+      const y = plot.y + frac(f) * plot.h;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+
+    // Where the trace first drops under the threshold.
+    const cross = data.mdf.findIndex((f) => Number.isFinite(f) && f < limit);
+    if (cross > 0) {
+      const cx = xAt((cross + 0.5) * (data.seconds / cols));
+      const cy = plot.y + frac(data.mdf[cross]) * plot.h;
+      ctx.fillStyle = col('--warn');
+      ctx.beginPath(); ctx.arc(cx, cy, 4, 0, Math.PI * 2); ctx.fill();
+      if (cssW >= 620) {
+        ctx.font = '11px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+        ctx.textAlign = 'left'; ctx.textBaseline = 'bottom';
+        ctx.fillText(`flagged · ${Math.round((cross + 0.5) * (data.seconds / cols))} s`,
+                     cx + 9, cy - 3);
+      }
+    }
+
+    // Where the trace ends: the number the picture is arguing for.
+    const last = valid[valid.length - 1];
+    const change = (last - valid[0]) / valid[0] * 100;
+    if (cssW >= 620) {
+      ctx.font = '600 12px ui-monospace, SFMono-Regular, Menlo, monospace';
+      ctx.fillStyle = '#F2F4F5';
+      ctx.textAlign = 'right'; ctx.textBaseline = 'bottom';
+      ctx.fillText(`MDF ${change >= 0 ? '+' : ''}${change.toFixed(0)} %`,
+                   plot.x + plot.w - 4, plot.y + 2);
+    }
+  }
+
+  // Ticks.
+  ctx.fillStyle = col('--text-3');
+  ctx.font = mono;
+  ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+  if (cssW >= 520) {
+    for (const hz of [10, 20, 30]) {
+      ctx.fillText(`${hz}`, plot.x - 8, plot.y + frac(hz) * plot.h);
+    }
+    ctx.textBaseline = 'bottom';
+    ctx.fillText('Hz', plot.x - 8, plot.y + 2);
+  }
+  ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+  for (const s of [0, 10, 20]) {
+    ctx.fillText(`${s}`, xAt(s), plot.y + plot.h + 6);
+  }
+  ctx.textAlign = 'right';
+  ctx.fillText(`${Math.round(data.seconds)} s`, plot.x + plot.w, plot.y + plot.h + 6);
+
+  // The two labels that explain the picture.
+  ctx.font = sans;
+  ctx.fillStyle = col('--text-3');
+  ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+  ctx.fillStyle = 'rgba(242,244,245,.55)';
+  ctx.font = '10px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+  ctx.fillText('BASELINE', plot.x + 6, plot.y + 6);
+}
+
+async function renderStrip() {
+  const canvas = $('#home-strip');
+  if (!canvas) return;
+  try {
+    const data = await loadStrip();
+    drawStrip(canvas, data);
+    const caption = $('#strip-caption');
+    if (caption) {
+      caption.textContent = `Example recording · ${data.label || data.channel} · ${Math.round(data.seconds)} s hold · 1–35 Hz · brighter = more power`;
+    }
+    window.__strip = data;
+  } catch (e) {
+    canvas.replaceWith(el('p', { class: 'meta', text: 'The example strip could not be loaded.' }));
+  }
+}
+
 // ── the fatigue plane ───────────────────────────────────────────────────────
 // Horizontal: change in amplitude. Vertical: change in median frequency, with
 // lower values further down. The two thresholds the method uses divide the
@@ -682,7 +891,7 @@ function planeCard(results, title) {
 }
 
 async function renderHome() {
-  drawPlane($('#home-plane'), state.analysis ? Object.values(state.analysis.results) : []);
+  await renderStrip();
 }
 
 // ── train ───────────────────────────────────────────────────────────────────
@@ -1196,7 +1405,6 @@ function wire() {
   });
 
   $('#home-start').addEventListener('click', () => nav('check'));
-  $('#home-demo').addEventListener('click', () => { nav('check'); $('#demo-btn').click(); });
 
   $('#sheet-close').addEventListener('click', () => { $('#sheet').hidden = true; });
   $('#sheet').addEventListener('click', (event) => {

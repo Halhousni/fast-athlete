@@ -5,36 +5,33 @@ The method, in the order it happens:
 1. Resample the channel to 200 Hz with a rational polyphase filter. The rate
    returned by `resample_to_200` is the true rate of the returned samples, so
    every frequency below is in real hertz. Nothing is relabelled.
-2. Take one wavelet synchrosqueezed transform of the whole channel (wsstpy,
-   analytic Morlet, 32 voices per octave, signal extension on). This replaces
-   the 35 band-filtered transforms the app used to run: on the bundled demo
-   recording the two agree on the verdict for all eight channels and differ by
-   at most one point of score, at 1/37 of the cost. See ENGINE-NOTES.md.
-3. Keep only time-frequency points whose power exceeds 0.9 times the mean
-   power of the plane, which suppresses the noise floor before any frequency
-   statistic is computed.
-4. Per time frame, compute the power-weighted mean instantaneous frequency
-   over 1-35 Hz.
-5. Compare the median of the whole recording with the median of the first
-   five seconds of the same contraction:
-
-       NFI = (MIF_baseline - MIF_median) / MIF_baseline * 100
-
-   A positive NFI means the spectrum moved down during the recording, which is
-   the usual signature of fatigue.
-6. Map NFI to a score, and the score to a traffic light. There is one
-   function for each, so the number and the colour cannot disagree.
+2. Filter and aggregate, the way FAST is defined: the channel is split into 34
+   overlapping bands between 1 and 35 Hz, each band gets its own
+   synchrosqueezed transform, and the band powers are summed back onto one
+   frequency grid. Each band is decimated to eight times its top edge first, so
+   a 1-3 Hz band is transformed at 24 Hz rather than 200 Hz; a band cannot hold
+   content above its own edge, so nothing is lost. Bands run in parallel.
+3. Keep only time-frequency points whose power exceeds 0.9 times the mean power
+   of the plane, which suppresses the noise floor before any frequency statistic
+   is computed.
+4. The fatigue call follows Zhao, Charoonsrisawad, Ichiyama & Chakrabarty
+   (2025): the change in median frequency and the change in RMS between the
+   start of the recording and its end.
+5. The mean instantaneous frequency, and the NFI it gives, is still computed and
+   reported as a second number; it no longer decides the verdict.
 
 Thresholds are provisional and await clinical validation. They are not a
 diagnosis.
 """
 from __future__ import annotations
 
+import os
+from concurrent.futures import ThreadPoolExecutor
 from fractions import Fraction
 
 import numpy as np
 import wsstpy
-from scipy.signal import resample_poly
+from scipy.signal import butter, decimate, filtfilt, resample_poly
 
 
 TARGET_FS = 200.0
@@ -45,6 +42,16 @@ BAND_LOW, BAND_HIGH = 1.0, 35.0
 MASK_FACTOR = 0.9
 VOICES_PER_OCTAVE = 32
 WAVELET = 'amor'
+
+# Filter and aggregate. The bands overlap: a band centred at c covers c-1 to
+# c+2 Hz, which is how the method was specified.
+BAND_STEP_HZ = 1.0
+BAND_BELOW_HZ = 1.0
+BAND_ABOVE_HZ = 2.0
+FA_VOICES = 16
+FA_WORKERS = int(os.environ.get('FAST_FA_WORKERS', '6'))
+GRID_STEP_HZ = 0.5
+METHOD = os.environ.get('FAST_TRANSFORM', 'aggregate').lower()
 
 # NFI thresholds, in per cent.
 NFI_GREEN = 15.0
@@ -78,14 +85,100 @@ def resample_to_200(sig: np.ndarray, fs: float) -> tuple[np.ndarray, float]:
     return out, float(fs) * up / down
 
 
-def transform(sig: np.ndarray, fs: float) -> tuple[np.ndarray, np.ndarray]:
-    """One masked synchrosqueezed transform. Returns (Tx, freqs), rows low to high."""
+def _grid(lo: float = BAND_LOW, hi: float = BAND_HIGH) -> np.ndarray:
+    """The frequency grid every band is summed onto, in hertz."""
+    return np.arange(lo, hi + 1e-9, GRID_STEP_HZ)
+
+
+def _band_power(sig: np.ndarray, fs: float, centre: float,
+                grid: np.ndarray, frames: int) -> np.ndarray | None:
+    """One band: filter, decimate, transform, and scatter onto the grid.
+
+    A band from f1 to f2 cannot hold anything above f2, so it is transformed at
+    eight times f2 (never below 20 Hz). Without this a 1-3 Hz band would be
+    transformed at 200 Hz for nothing, and the aggregate would cost minutes.
+    """
+    f1 = max(centre - BAND_BELOW_HZ, BAND_LOW)
+    f2 = centre + BAND_ABOVE_HZ
+    if f1 >= f2 or f2 >= 0.5 * fs:
+        return None
+    b, a = butter(2, [f1 / (0.5 * fs), f2 / (0.5 * fs)], btype='band')
+    band = filtfilt(b, a, sig)
+    factor = int(max(1, min(round(fs / max(20.0, 8.0 * f2)), 64)))
+    if factor > 1:
+        band = decimate(band, factor, ftype='iir', zero_phase=True)
+        rate = fs / factor
+    else:
+        rate = fs
+    if len(band) < 32:
+        return None
+    sst, freqs = wsstpy.wsst(band, fs=rate, wavelet=WAVELET,
+                             voices_per_octave=FA_VOICES, extend_signal=True)
+    power = np.abs(sst) ** 2
+    if power.shape[1] != frames:
+        # A decimated band has fewer frames than the recording. Put them back on
+        # the recording's time base so every band describes the same instants.
+        t_out = np.linspace(0.0, 1.0, frames)
+        t_in = np.linspace(0.0, 1.0, power.shape[1])
+        power = np.stack([np.interp(t_out, t_in, row) for row in power])
+
+    # Linear scatter onto the shared grid; rows outside the band are dropped.
+    inside = (freqs >= f1) & (freqs <= f2)
+    if inside.sum() < 2:
+        return None
+    fb = freqs[inside]
+    pb = power[inside]
+    out = np.zeros((len(grid), pb.shape[1]))
+    upper = np.clip(np.searchsorted(grid, fb), 1, len(grid) - 1)
+    lower = upper - 1
+    span = grid[upper] - grid[lower]
+    weight = np.clip((fb - grid[lower]) / np.where(span == 0, 1, span), 0.0, 1.0)
+    out[lower] += pb * (1.0 - weight)[:, None]
+    out[upper] += pb * weight[:, None]
+    return out
+
+
+def transform_fa(sig: np.ndarray, fs: float) -> tuple[np.ndarray, np.ndarray]:
+    """Filter and aggregate: 34 band transforms summed onto one grid.
+
+    Returns (power, freqs) where power is real, freqs low to high.
+    """
+    grid = _grid()
+    frames = len(sig)
+    centres = np.arange(BAND_LOW, BAND_HIGH, BAND_STEP_HZ)
+    total = np.zeros((len(grid), frames))
+    pieces = 0
+    with ThreadPoolExecutor(max_workers=max(1, min(FA_WORKERS, len(centres)))) as pool:
+        for piece in pool.map(lambda c: _band_power(sig, fs, c, grid, frames), centres):
+            if piece is not None:
+                total += piece
+                pieces += 1
+    if not pieces:
+        raise EngineError('No band of this channel could be transformed.')
+    mask = total > MASK_FACTOR * float(np.mean(total))
+    return total * mask, grid
+
+
+def transform_single(sig: np.ndarray, fs: float) -> tuple[np.ndarray, np.ndarray]:
+    """One whole-band transform, kept for comparison. See ENGINE-NOTES.md."""
     sst, freqs = wsstpy.wsst(sig, fs=fs, wavelet=WAVELET,
                              voices_per_octave=VOICES_PER_OCTAVE,
                              extend_signal=True)
     power = np.abs(sst) ** 2
     mask = power > MASK_FACTOR * float(np.mean(power))
-    return sst * mask, freqs
+    return power * mask, freqs
+
+
+def transform(sig: np.ndarray, fs: float) -> tuple[np.ndarray, np.ndarray]:
+    """The pipeline's transform: filter and aggregate by default."""
+    if METHOD == 'single':
+        return transform_single(sig, fs)
+    return transform_fa(sig, fs)
+
+
+def _power(arr: np.ndarray) -> np.ndarray:
+    """The plane may arrive as power (real) or as a transform (complex)."""
+    return np.abs(arr) ** 2 if np.iscomplexobj(arr) else arr
 
 
 def mean_instantaneous_frequency(Tx: np.ndarray, freqs: np.ndarray,
@@ -93,7 +186,7 @@ def mean_instantaneous_frequency(Tx: np.ndarray, freqs: np.ndarray,
                                  hi: float = BAND_HIGH) -> np.ndarray:
     """Power-weighted mean frequency per time frame, NaN where the band is empty."""
     band = (freqs >= lo) & (freqs <= hi)
-    power = np.abs(Tx[band, :]) ** 2
+    power = _power(Tx[band, :])
     fb = freqs[band]
     out = np.full(power.shape[1], np.nan)
     total = power.sum(axis=0)
@@ -173,7 +266,7 @@ def _epochs(n: int, fs: float) -> list[tuple[int, int]]:
 
 def median_frequency_series(Tx: np.ndarray, freqs: np.ndarray, fs: float) -> np.ndarray:
     """Median frequency per epoch, from the transform's frequency marginal."""
-    power = np.abs(Tx) ** 2
+    power = _power(Tx)
     out = []
     for start, stop in _epochs(power.shape[1], fs):
         spectrum = power[:, start:stop].mean(axis=1)
@@ -214,6 +307,12 @@ def fatiguability(sig: np.ndarray, Tx: np.ndarray, freqs: np.ndarray,
     """Change in MDF and RMS from the start of the recording to its end."""
     mdf = median_frequency_series(Tx, freqs, fs)
     rms = rms_series(sig, fs)
+    if len(rms) != len(mdf) and len(rms) > 1 and len(mdf) > 1:
+        # The aggregate's frames follow its slowest band; put RMS on the same
+        # time base so the two series describe the same instants.
+        xp = np.linspace(0.0, 1.0, len(rms))
+        x = np.linspace(0.0, 1.0, len(mdf))
+        rms = np.interp(x, xp, rms)
     n = min(len(mdf), len(rms))
     mdf, rms = mdf[:n], rms[:n]
     ok = np.isfinite(mdf) & np.isfinite(rms) & (rms > 0) & (mdf > 0)
