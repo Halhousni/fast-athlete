@@ -126,13 +126,14 @@ function toggleTheme() {
 // ── navigation ──────────────────────────────────────────────────────────────
 function nav(screen) {
   state.screen = screen;
-  for (const name of ['check', 'train', 'history', 'profile']) {
+  for (const name of ['home', 'check', 'train', 'history', 'profile']) {
     $('#screen-' + name).classList.toggle('hidden', name !== screen);
   }
   document.querySelectorAll('.tab').forEach((tab) => {
     tab.setAttribute('aria-selected', String(tab.dataset.nav === screen));
   });
   window.scrollTo({ top: 0 });
+  if (screen === 'home') renderHome();
   if (screen === 'train') renderTrain();
   if (screen === 'history') loadHistory();
   if (screen === 'profile') renderProfile();
@@ -338,9 +339,10 @@ function renderResults() {
     countsBox.append(el('span', { class: 'count' },
       el('span', { class: `dot dot--${key}` }),
       el('strong', { text: String(counts[key]) }),
-      { green: 'recovered', amber: 'some fatigue', red: 'needs rest' }[key]));
+      { green: 'low', amber: 'medium', red: 'high' }[key]));
   }
   box.append(el('div', { class: 'verdict' }, title, lede, countsBox));
+  box.append(planeCard(results, 'Where each muscle moved'));
 
   // rows
   const rows = el('div', { class: 'rows' });
@@ -548,6 +550,139 @@ async function saveIfPossible() {
       toast(error.message);
     }
   }
+}
+
+
+// ── the fatigue plane ───────────────────────────────────────────────────────
+// Horizontal: change in amplitude. Vertical: change in median frequency, with
+// lower values further down. The two thresholds the method uses divide the
+// plane, and every muscle is a point that moved from the origin.
+const PLANE = { x0: -25, x1: 65, y0: 15, y1: -65, w: 960, h: 440 };
+
+function drawPlane(canvas, results) {
+  if (!canvas) return;
+  const dpr = window.devicePixelRatio || 1;
+  const { x0, x1, y0, y1, w: W, h: H } = PLANE;
+  canvas.width = W * dpr;
+  canvas.height = H * dpr;
+  canvas.style.width = '100%';
+  canvas.style.height = 'auto';
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+
+  const css = getComputedStyle(document.documentElement);
+  const col = (name) => css.getPropertyValue(name).trim() || '#888';
+  const ink = col('--text-3');
+  const line = col('--line');
+  const ok = col('--ok'), warn = col('--warn'), bad = col('--bad');
+
+  const pad = { l: 66, r: 22, t: 16, b: 46 };
+  const X = (v) => pad.l + (v - x0) / (x1 - x0) * (W - pad.l - pad.r);
+  const Y = (v) => pad.t + (v - y0) / (y1 - y0) * (H - pad.t - pad.b);
+  const plot = { x: pad.l, y: pad.t, w: W - pad.l - pad.r, h: H - pad.t - pad.b };
+
+  // Regions: the quiet corner and the corner that means fatigue.
+  ctx.fillStyle = ok; ctx.globalAlpha = 0.06;
+  ctx.fillRect(X(x0), Y(y0), X(10) - X(x0), Y(-5) - Y(y0));
+  ctx.fillStyle = bad; ctx.globalAlpha = 0.07;
+  ctx.fillRect(X(10), Y(-5), X(x1) - X(10), Y(y1) - Y(-5));
+  ctx.globalAlpha = 1;
+
+  // Grid and ticks
+  ctx.strokeStyle = line; ctx.lineWidth = 1;
+  ctx.fillStyle = ink;
+  ctx.font = '11px ui-monospace, SFMono-Regular, Menlo, monospace';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+  for (const v of [-20, 0, 20, 40, 60]) {
+    ctx.beginPath(); ctx.moveTo(X(v), plot.y); ctx.lineTo(X(v), plot.y + plot.h); ctx.stroke();
+    ctx.fillText(`${v}`, X(v), plot.y + plot.h + 8);
+  }
+  ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+  for (const v of [10, 0, -20, -40, -60]) {
+    ctx.beginPath(); ctx.moveTo(plot.x, Y(v)); ctx.lineTo(plot.x + plot.w, Y(v)); ctx.stroke();
+    ctx.fillText(`${v}`, plot.x - 8, Y(v));
+  }
+
+  // Thresholds
+  ctx.save();
+  ctx.setLineDash([5, 5]);
+  ctx.strokeStyle = col('--line-strong');
+  ctx.beginPath(); ctx.moveTo(X(10), plot.y); ctx.lineTo(X(10), plot.y + plot.h); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(plot.x, Y(-5)); ctx.lineTo(plot.x + plot.w, Y(-5)); ctx.stroke();
+  ctx.restore();
+
+  // Axis titles, horizontal: rotated text at this size reads badly.
+  ctx.fillStyle = ink;
+  ctx.font = '11px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
+  ctx.fillText('amplitude change (%)', plot.x + plot.w / 2, H - 6);
+  ctx.textAlign = 'right'; ctx.textBaseline = 'top';
+  ctx.fillStyle = col('--text-3');
+  ctx.fillText('median frequency change (%)', plot.x + plot.w - 4, plot.y + 2);
+
+  // Quiet corner labels
+  ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+  ctx.fillStyle = ok; ctx.globalAlpha = .8;
+  ctx.fillText('low', X(x0) + 10, Y(y0) + 8);
+  ctx.fillStyle = bad;
+  ctx.textAlign = 'right'; ctx.textBaseline = 'bottom';
+  ctx.fillText('high', X(x1) - 10, Y(y1) - 8);
+  ctx.globalAlpha = 1;
+
+  // Muscles
+  const points = (results || []).filter((r) => Number.isFinite(r.delta_mdf) && Number.isFinite(r.delta_rms));
+  if (!points.length) {
+    ctx.fillStyle = ink;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.font = '13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+    ctx.fillText('Your muscles appear here after a check', plot.x + plot.w / 2, plot.y + plot.h / 2);
+    return;
+  }
+  ctx.font = '600 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+  const placed = [];
+  const quiet = points.filter((r) => r.status === 'green' || r.status === 'grey');
+  for (const r of points) {
+    const px = Math.max(X(x0), Math.min(X(x1), X(r.delta_rms)));
+    const py = Math.max(Y(y0), Math.min(Y(y1), Y(r.delta_mdf)));
+    const colour = r.status === 'red' ? bad : r.status === 'amber' ? warn : r.status === 'green' ? ok : ink;
+    ctx.strokeStyle = colour; ctx.globalAlpha = .45; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(X(0), Y(0)); ctx.lineTo(px, py); ctx.stroke();
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = colour;
+    ctx.beginPath(); ctx.arc(px, py, 5.5, 0, Math.PI * 2); ctx.fill();
+    if (r.status === 'green' || r.status === 'grey') continue;   // labelled as a group
+    // Nudge the label down until it sits clear of the ones already drawn.
+    let ly = py;
+    while (placed.some((p) => Math.abs(p.x - px) < 64 && Math.abs(p.y - ly) < 15)) ly += 15;
+    placed.push({ x: px, y: ly });
+    ctx.fillStyle = col('--text');
+    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    ctx.fillText(r.id, px + 9, ly);
+  }
+  if (quiet.length) {
+    ctx.fillStyle = ok;
+    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    ctx.fillText(`${quiet.length} at low`, X(0) + 10, Y(0) - 14);
+  }
+}
+
+function planeCard(results, title) {
+  const canvas = el('canvas', { class: 'plane', id: 'plane-canvas' });
+  const card = el('div', { class: 'card plane-card mt-16' },
+    el('div', { class: 'plane-head' },
+      el('h3', { text: title || 'The fatigue plane' }),
+      el('div', { class: 'legend' },
+        el('span', null, el('i', { style: 'background:var(--ok)' }), 'low'),
+        el('span', null, el('i', { style: 'background:var(--warn)' }), 'medium'),
+        el('span', null, el('i', { style: 'background:var(--bad)' }), 'high'))),
+    el('div', { class: 'plane-wrap' }, canvas));
+  requestAnimationFrame(() => drawPlane(canvas, results));
+  return card;
+}
+
+async function renderHome() {
+  drawPlane($('#home-plane'), state.analysis ? Object.values(state.analysis.results) : []);
 }
 
 // ── train ───────────────────────────────────────────────────────────────────
@@ -1060,6 +1195,9 @@ function wire() {
     uploadFile(state.file, rate);
   });
 
+  $('#home-start').addEventListener('click', () => nav('check'));
+  $('#home-demo').addEventListener('click', () => { nav('check'); $('#demo-btn').click(); });
+
   $('#sheet-close').addEventListener('click', () => { $('#sheet').hidden = true; });
   $('#sheet').addEventListener('click', (event) => {
     if (event.target === $('#sheet')) $('#sheet').hidden = true;
@@ -1074,6 +1212,7 @@ function wire() {
 }
 
 wire();
+nav('home');
 // The cookie outlives a reload, so the server is asked who it belongs to;
 // otherwise a shared device looks signed out while the session is still live.
 api('/profiles/me')
