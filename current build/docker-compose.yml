@@ -3,17 +3,24 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      network: host
+      args:
+        # Stamped into the image so a running container names its commit.
+        FAST_BUILD: ${FAST_BUILD:-local}
     container_name: signal-analyzer
-    mem_limit: 512m
+    # One channel peaks near 60 MB and eight near 450 MB in one process,
+    # measured on the bundled 8-channel demo. 1 GB leaves room for the two
+    # analyses the app allows to run at once.
+    mem_limit: 1g
     logging:
       driver: json-file
       options:
         max-size: "10m"
         max-file: "3"
     ports:
-      # Bind address is site specific. Set FAST_BIND_IP in .env (see .env.example).
-      - "${FAST_BIND_IP:-0.0.0.0}:8501:8501"
+      # Loopback by default. Docker's published ports bypass UFW, so binding
+      # every interface exposes the app directly, around the proxy that
+      # terminates TLS. Set FAST_BIND_IP in .env to publish elsewhere.
+      - "${FAST_BIND_IP:-127.0.0.1}:8501:8501"
     volumes:
       - fast_data:/data
     restart: unless-stopped
