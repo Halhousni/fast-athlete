@@ -297,7 +297,7 @@ async function analyse() {
 
 // ── results ─────────────────────────────────────────────────────────────────
 const RESULTS_ORDER = { red: 0, amber: 1, green: 2, grey: 3 };
-const WORDS = { green: 'Recovered', amber: 'Some fatigue', red: 'Needs rest', grey: 'No reading' };
+const WORDS = { green: 'Low', amber: 'Medium', red: 'High', grey: 'None' };
 
 function statusRank(status) { return status in RESULTS_ORDER ? RESULTS_ORDER[status] : 4; }
 
@@ -319,13 +319,13 @@ function renderResults() {
   const sentence = (names) => names.endsWith('.') ? names : names + '.';
   const title = el('h1');
   if (counts.red) {
-    title.append(el('span', { class: 'status--red', text: 'Needs rest' }));
+    title.append(el('span', { class: 'status--red', text: 'High fatigue' }));
     title.append(': ' + sentence(listNames(results.filter((r) => r.status === 'red').map(nameOf))));
   } else if (counts.amber) {
-    title.append(el('span', { class: 'status--amber', text: 'Some fatigue' }));
+    title.append(el('span', { class: 'status--amber', text: 'Medium fatigue' }));
     title.append(' in ' + sentence(listNames(results.filter((r) => r.status === 'amber').map(nameOf))));
   } else if (counts.green) {
-    title.append(el('span', { class: 'status--green', text: 'Recovered' }));
+    title.append(el('span', { class: 'status--green', text: 'Low fatigue' }));
     title.append(counts.green > 1 ? ` — all ${counts.green} muscles.` : ' — ' + sentence(listNames(results.filter(r => r.status === 'green').map(nameOf))));
   } else {
     title.append(el('span', { class: 'status--grey', text: 'Nothing measurable' }));
@@ -350,7 +350,9 @@ function renderResults() {
       el('span', { class: `dot dot--${r.status}` }),
       el('div', { class: 'name' },
         el('strong', { text: meta.id && meta.recognised ? `${meta.id} · ${meta.name}` : r.id }),
-        el('span', { text: r.tip || '' })),
+        // The two numbers the method reads, with their labels.
+        el('span', { text: r.delta_mdf === undefined ? (r.tip || '')
+          : `MDF ${signed(r.delta_mdf)}% · RMS ${signed(r.delta_rms)}%` })),
       el('span', { class: `score score--${r.status}`, text: r.status === 'grey' ? '—' : String(r.score) }),
       el('span', { class: 'word', text: WORDS[r.status] || '' })));
   }
@@ -366,7 +368,7 @@ function renderResults() {
     el('summary', null, ICON.chevron(), 'How this was measured'),
     el('dl', null,
       el('dt', { text: 'Signal' }), el('dd', { text: 'Frequency content of each muscle\'s electrical activity, start of the contraction compared with the whole recording.' }),
-      el('dt', { text: 'Band' }), el('dd', { text: '1–35 Hz, power-weighted mean frequency' }),
+      el('dt', { text: 'Reads' }), el('dd', { text: 'median frequency and RMS, change from the start of the recording' }),
       el('dt', { text: 'Baseline' }), el('dd', { text: 'First five seconds of the same recording' }),
       el('dt', { text: 'Scale' }), el('dd', { text: '70–100 recovered · 40–69 some fatigue · under 40 needs rest' }),
       el('dt', { text: 'Window' }), el('dd', { text: up && up.analysed_seconds ? `First ${formatDuration(up.analysed_seconds)} of the recording` : 'Up to 30 seconds' }),
@@ -523,7 +525,8 @@ async function saveIfPossible() {
   if (!state.profile || !state.analysis || state.saved) return;
   const results = Object.values(state.analysis.results).map((r) => ({
     id: r.id, column: r.column, status: r.status, score: r.score,
-    nfi: r.nfi, tip: r.tip, centroid: r.centroid,
+    nfi: r.nfi, tip: r.tip, level: r.level,
+    delta_mdf: r.delta_mdf, delta_rms: r.delta_rms,
   }));
   try {
     await api('/save', {
@@ -972,6 +975,11 @@ async function renderHomeLast() {
 }
 
 // ── formatting ──────────────────────────────────────────────────────────────
+function signed(value) {
+  const rounded = Math.round(value);
+  return rounded > 0 ? `+${rounded}` : String(rounded);
+}
+
 function formatDuration(seconds) {
   if (seconds === null || seconds === undefined) return '—';
   const total = Math.round(seconds);

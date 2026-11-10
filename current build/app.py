@@ -75,7 +75,10 @@ class ResultIn(BaseModel):
     score: int = Field(default=0, ge=0, le=100)
     nfi: float | None = None
     tip: str = Field(default='', max_length=300)
-    centroid: float | None = None
+    # What the verdict is read from.
+    level: str = Field(default='', max_length=8)
+    delta_mdf: float | None = None
+    delta_rms: float | None = None
 
 
 class SaveIn(BaseModel):
