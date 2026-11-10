@@ -1,154 +1,159 @@
-# FAST ATHLETE — Design Decisions
+# FAST — design decisions
 
 Filter and Aggregate Synchrosqueezed Transform. This file records how the app
-works now and why the parts were chosen. It is not a user guide, see README.md
-for that.
+works now and why the parts were chosen. It is not a user guide; that is
+README.md.
 
 ## The pipeline
 
-`_run_fast()` in `app.py` does the following per muscle channel.
+`engine.py`, per channel.
 
-1. Decimate to 200 Hz with an IIR decimator if the recording is faster.
-2. Take one synchrosqueezed CWT of the whole decimated signal, Morlet wavelet
-   with mu = 6 and 32 voices per octave.
-3. Build an aggregate transform by walking centre frequencies from 1 Hz to 35 Hz
-   in 1 Hz steps. For each centre, bandpass the signal, run a second SSQ-CWT over
-   that narrow band, and accumulate. The accumulated transform is divided by the
-   number of valid bands.
-4. Mask the aggregate by the full-band transform, keeping only points where the
-   full-band power exceeds 0.9 times its mean. This suppresses the low-power
-   noise floor before any frequency statistic is computed.
+1. `resample_to_200` decimates to 200 Hz with `scipy.signal.resample_poly`, using
+   a rational approximation of `200 / fs`. It returns the true rate of the
+   returned samples, so every frequency downstream is in real hertz. A recording
+   at or below 200 Hz is left alone and keeps its own rate. Nothing is relabelled:
+   the previous build set `fs = 200` whether or not the decimation had run, which
+   put every frequency off by the ratio of the real rate to 200.
+2. `transform` takes one wavelet synchrosqueezed transform of the whole channel:
+   `wsstpy.wsst`, analytic Morlet, 32 voices per octave, `extend_signal=True`
+   (MATLAB's default, which reduces edge effects in the first seconds where the
+   baseline is taken).
+3. The transform is masked: points whose power is below 0.9 times the mean power
+   of the plane are set to zero. This suppresses the noise floor before any
+   frequency statistic is computed.
+4. `mean_instantaneous_frequency` computes, per time frame, the power-weighted
+   mean frequency over 1–35 Hz.
 
-The output is a time by frequency complex matrix plus the frequency axis.
+The previous build built its matrix from 35 band-filtered transforms (1 Hz to
+35 Hz in 1 Hz steps, each with its own SSQ-CWT) and summed them. The bands shaped
+the spectrum; the transform already resolves frequency, so the band can be
+selected on the frequency axis. On the bundled demo recording every channel gives
+the same verdict from one transform, with scores within one point, at 1/6 of the
+cost (33.1 s to 5.7 s for eight channels). The measurement is in ENGINE-NOTES.md
+and `scripts/compare_transform.py` reproduces it.
 
 ## Fatigue classification
 
-`_classify_fatigue()` computes the power-weighted mean instantaneous frequency
-per time frame over 1 to 35 Hz, then compares the median of the whole recording
-against the first 5 seconds.
+`classify` compares the median of the recording with the median of the first five
+seconds of the same contraction:
 
 ```
 NFI = (MIF_baseline - MIF_median) / MIF_baseline * 100
 ```
 
-A downward shift of the EMG spectrum is the standard signature of fatigue, so a
-positive NFI means the spectrum moved down during the recording.
+A positive NFI means the spectrum moved down during the recording, which is the
+usual signature of fatigue. The baseline is the subject's own opening seconds, so
+the method is within-subject and does not compare an athlete to a population.
 
-| NFI | status | score |
-|-----|--------|-------|
-| under 15 % | green, no fatigue detected | `100 - 2 * NFI` |
-| 15 to 35 % | amber, early fatigue signs | `100 - 2 * NFI` |
-| over 35 % | red, significant fatigue | `100 - 2 * NFI`, floored at 0 |
+`score_from_nfi` maps NFI to 0–100 and `status_from_score` maps the score to a
+traffic light, in that order, so the number and the colour cannot disagree. The
+overall verdict is the worst muscle's status (`overall`), with the mean score
+reported separately: seven recovered muscles and one that needs rest is not a
+recovered athlete.
 
-The score is clamped to 0 to 100, and the frontend reads it as 70 and above
-recovered, 40 to 69 some fatigue, below 40 needs rest.
+Guards, all added because a missing guard produced a confident green:
 
-The baseline is the subject's own opening seconds of the same contraction, so the
-method is within-subject. It does not compare an athlete to a population.
+- a recording under 15 s is grey, not scored;
+- if fewer than half of the baseline frames survive the power mask, grey;
+- if no frame survives, grey;
+- one NaN sample no longer discards a channel: `ingest` interpolates gaps up to
+  1 % of samples and 50 ms, and drops a channel only beyond that, with the reason.
 
-**These thresholds are provisional.** They await clinical validation from Prof
-Samit Chakrabarty at the University of Leeds.
+**The thresholds are provisional.** 15 % and 35 % await clinical validation from
+Prof Samit Chakrabarty at the University of Leeds. The results screen says so in
+plain words rather than only here.
 
 ## Bowen LOW centroid
 
-`bowen_centroid.py` implements the LOW 8 to 23 Hz centroid described in "FAST LOW
-8–23 Hz Centroid Calculation" (Bowen, 22 July 2026). It runs alongside the MIF
-classification through `run_bowen_pipeline()` and returns a `BowenResult`.
+`bowen_centroid.py` implements the LOW 8–23 Hz centroid described in "FAST LOW
+8–23 Hz Centroid Calculation" (Bowen, 22 July 2026). It runs on the same masked
+transform through `run_bowen_pipeline` and returns a `BowenResult`: per time point
+the LOW centroid, LOW mass, LOW fraction and LOW MDF with a validity mask, then
+phase means split 60/40 into CON and ECC, early, middle and late centroids.
 
-It computes per time point the LOW centroid, LOW mass, LOW fraction and LOW MDF,
-with a full validity mask, then derives phase means, split at a 60 percent
-contraction fraction into CON and ECC phases, early, middle and late centroid
-values, and whole-phase trajectories sampled at 101 points. A 1500 sample pad is
-removed from the centroid before the phase split.
+It is reported to the athlete but does not drive the traffic light. The file's own
+notes say why: the spec assigns no universal fatigue direction to the centroid,
+and any threshold on it would be this project's addition.
 
-The MIF path gives a single status per muscle. The Bowen path gives the shape of
-the change over the contraction, which is what the trend and trajectory views use.
+## Reading a recording
 
-## Why decimation to 200 Hz
+`ingest.load` handles what device exports actually contain.
 
-The fatigue statistic uses only content below 37 Hz after bandpass filtering, so
-Nyquist requires just over 74 Hz. Decimating 1500 Hz to 200 Hz leaves nearly 3x
-headroom and drops no information in the band of interest. Lowpass and downsample
-before spectral estimation is standard practice in the EMG fatigue literature. The
-measured speedup is about 7.5x.
+- Sampling rate, in order of authority: a value the athlete supplies, a key-value
+  line in the first 20 lines (`Sampling rate: 2000`, `fs=2048`), a time column
+  (uniform steps, recognised by name or by being monotonic with sub-second steps).
+  If none exists, `fs` is None and the page asks for it.
+- Separators and decimals: every candidate separator is scored by how many numeric
+  columns it yields, because a semicolon file with comma decimals also parses as
+  one bad comma-separated column. `decimal=','` is used where the separator is
+  not a comma.
+- A units row under the header (`mV,mV,mV`) is detected by its column names and
+  skipped.
+- Channels that are not EMG are dropped: time, marker, trigger, sync, reference,
+  event, frame, sample, accelerometer, gyroscope, IMU, force, torque, angle,
+  magnetometer, ECG, respiration, and unit-only names.
+- `.mat`: scalars are skipped (the previous build counted `fs` as a channel and
+  truncated every channel to one sample), 2-D arrays are split along the time axis
+  into channels, and `fs` is matched by exact key first.
+- Channels are matched to muscles by full name first, then by abbreviation as a
+  whole token or digit-anchored, so `VASTUS LATERALIS` cannot match `ST`.
 
-## Why ssqueezepy and not a self-built GPU transform
+## Storage and access
 
-The original build carried a hand-written WSST with a GPU backend. That backend
-offloaded only the Morlet kernel and left every FFT on the CPU, so kernel launch
-overhead likely cancelled any gain, and it tied the build to one vendor's GPU
-driver. ssqueezepy offers a published implementation with a DOI and CI, several
-wavelet families, and a multi-threaded CPU path that measured faster in practice.
-The GPU code and its container dependencies have since been removed entirely and
-the app runs CPU only.
+`store.py`.
 
-## Why the bands run sequentially
+- Profiles and results in SQLite, WAL mode, a connection per request, foreign keys
+  on. The database is at `$FAST_DATA_DIR/fast.db`, a volume in the container.
+- A PIN is stored as `scrypt(pin, per-profile salt)`. Verifying issues a random
+  token stored as sha256, returned as an HttpOnly cookie, and required by
+  `/history`, `/save` and `DELETE /profiles/{id}`. The previous build checked the
+  PIN in the browser and left the routes open.
+- Five wrong PINs per profile are throttled for fifteen minutes.
+- Profiles from the previous build carry an unsalted `sha256('fast|' + pin)`. That
+  hash is accepted once, then replaced with the salted one, so nobody is locked
+  out by the change.
+- `/save` recomputes the verdict from the stored result rather than trusting the
+  client's score.
+- Uploads are held in memory as float32, at most 20 sessions, expiring after 30
+  minutes. They used to be pickled into a temporary directory that survived
+  nothing and filled the container layer.
 
-A `ThreadPoolExecutor` with four workers was tried for concurrent band processing
-and crashed with "process terminated abruptly". NumPy plus forked processes cause
-BLAS threading deadlocks. Speed comes instead from decimation and from analyzing
-fewer muscles, not from parallelism.
+## Interface
 
-## Frontend
+`templates/index.html`, `static/app.css`, `static/app.js`.
 
-The entire interface is one HTML page embedded in `app.py` as `HTML_PAGE`. There
-is no template engine, no build step, no JavaScript framework and no bundler. The
-page is a plain Python string, so it cannot be an f-string, and dynamic markup is
-assembled in JavaScript.
+The page was 1 630 lines inside a Python string. It is now three files, which
+allows a strict Content-Security-Policy (`script-src 'self'`, no inline styles),
+caching, linting and reviewable diffs. Nodes are built with `textContent`; no
+user-supplied string reaches `innerHTML`, which closes the stored XSS that a
+profile name or file name could trigger.
 
-Material 3 dark theme by default, with a light variant driven by
-`:root[data-theme="light"]` token overrides. The choice persists in
-`localStorage` under `fast_theme`, and a small inline script in the head applies
-it before first paint so there is no flash. Inter is loaded from Google Fonts.
+- Four tabs: Check, Train, History, Profile.
+- Check: recording, then the rate if it is unknown, then muscles, then the result.
+- Train: the call for today, capped by the worst muscle, with the muscles to watch,
+  a seven-day strip and no invented data. It reads the saved check, or the one just
+  run for someone who has not signed in.
+- History: a trend only from real points, from two onwards.
+- Profile: sign in, add, delete, and the version.
 
-Mobile first, capped at 480 px and widened in two breakpoints. Navigation is a
-fixed bottom bar with five screens, welcome, upload, history, train and profile.
+Visual system: three status colours carry the meaning and one ember accent is
+reserved for actions, at measured contrast in both themes (the previous palette
+put `#00E676` on white at 1.67:1). Six type sizes in two weights, sentence case,
+a 4 px spacing grid. Removed: the gauge duplicated on two screens, the notification
+bell with a fake badge, the example-result card, the video of the app inside the
+app, and a hardcoded chart of M T W T F S at invented heights that was shown as
+the athlete's trend.
 
-The muscle map is a canvas widget from MuscleMapJS, bundled into the page as a
-minified IIFE with esbuild. The local copy carries one added method,
-`highlightSide(muscle, side, color)`, so a single leg can be coloured rather than
-both. Channel to region mapping treats vastus lateralis and vastus medialis as
-distinct regions, which is the reason for choosing this library over the
-alternatives. The smaller thumbnails on the selection grid and result cards use
-inline SVG paths instead.
-
-## Profiles and storage
-
-Athlete profiles and saved assessments live in SQLite through stdlib `sqlite3`
-only, no extra dependency. The database sits at `$FAST_DATA_DIR/fast.db`, which
-defaults to `/data`, and in the container that path is a named volume.
-
-A profile PIN is stored as `sha256('fast|' + pin)` and is optional. `has_pin` is
-derived from whether the hash is null rather than stored separately.
-
-Uploaded signals are held in a temporary directory and an in-memory dictionary,
-keyed by a hash of the filename. They are deliberately ephemeral and do not
-survive a container restart, since an upload belongs to one assessment.
-
-## File format support
-
-- `.mat`, read with `scipy.io`, sampling rate taken from a variable matching
-  `fs`, `samp` or `rate`
-- `.txt` and `.csv`, sampling rate parsed from the first 20 lines by regex, so
-  headers reading `Frequency` as well as `fs` and `sample rate` work
-- separator detection across comma, tab and semicolon
-- up to 5 leading metadata rows skipped, which covers the four-row MR32 header
-- muscle channels chosen by excluding time, marker, trigger, sync, ref, event,
-  frame, sample and unit-only columns
-- column names are matched to muscles by full name first, then by abbreviation,
-  and an abbreviation only matches as a whole token, so `ST` cannot match inside
-  `VASTUS LATERALIS`
-
-## Limits
-
-- 30 seconds per channel. Longer recordings are truncated, not resampled.
-- Thresholds are provisional and not clinically validated.
-- The score is relative to the opening seconds of the same recording, so a
-  recording that starts already fatigued will read as recovered.
-- The interface is built for two legs and seven arm channels. Other channel sets
-  will analyze correctly but may not map to a highlighted region.
+The body map uses MuscleMapJS (MIT) unchanged from the vendored bundle, with the
+local `highlightSide` patch. It is tinted with the status colours; unmeasured
+regions use the surface line colour so the silhouette reads as one figure.
 
 ## Deployment
 
-Not documented in this repository. The app is deployed as a Docker container
-serving port 8501, built from `current build/Dockerfile`.
+`docker-compose.yml` builds `signal-analyzer` from `current build`, publishes it on
+`$FAST_BIND_IP:8501` (loopback by default, because published ports bypass UFW),
+keeps the database on the `fast_data` volume, and allows 1 GB: one channel peaks
+near 60 MB and eight near 450 MB, measured.
+
+The image runs as a non-root user, has a healthcheck against `/healthz`, and takes
+`FAST_BUILD` as a build argument so the running container names its commit.

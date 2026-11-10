@@ -1,90 +1,112 @@
-# FAST ATHLETE
+# FAST
 
-FAST estimates muscle fatigue from surface EMG recordings. An athlete uploads a
-recording, picks the muscles, and gets a green, amber, or red status for each one
-with a recovery score out of 100.
+Muscle fatigue from surface EMG. Upload a recording, pick the muscles, get a
+traffic light for each one and a call for today.
 
-**This is a research prototype.** The method is still under study and the scores
-are not a clinical or diagnostic measurement.
+FAST is a research prototype. It is not a diagnostic device, and the thresholds
+it uses are still being validated.
 
-Live instance: https://fast.ptrehab.icu
+## How it measures
 
-## How it works
+1. Each channel is resampled to 200 Hz with a polyphase filter. The rate comes
+   from the athlete, from a header line in the file, or from a time column. FAST
+   refuses to guess.
+2. One wavelet synchrosqueezed transform of the whole channel (`wsstpy`, analytic
+   Morlet, 32 voices per octave, signal extension on).
+3. Points whose power is below 0.9 times the mean power of the plane are zeroed,
+   which suppresses the noise floor.
+4. Per time frame, the power-weighted mean instantaneous frequency over 1–35 Hz.
+5. The median of the whole recording is compared with the median of the first
+   five seconds of the same contraction:
 
-FAST tracks the downward shift in the EMG power spectrum that happens as a muscle
-fatigues. The signal goes through a synchrosqueezed continuous wavelet transform
-(SSQ-CWT), the spectrum is aggregated into bands, and the low-frequency centroid
-of that band power gives the fatigue index. Recordings are capped at 30 seconds
-per channel. `DESIGN.md` has the full description.
+   ```
+   NFI = (MIF_baseline - MIF_median) / MIF_baseline × 100
+   ```
 
-Results feed a per-muscle traffic light. 70 and above reads as recovered, 40 to
-69 as some fatigue, below 40 as needing rest.
+6. NFI becomes a score, and the score becomes the traffic light:
 
-## Running locally
+   | NFI | status | score |
+   |---|---|---|
+   | under 15 % | recovered | 70–100 |
+   | 15–35 % | some fatigue | 40–69 |
+   | over 35 % | needs rest | 0–39 |
 
-```bash
-python3 -m venv /tmp/fastvenv
-/tmp/fastvenv/bin/pip install fastapi uvicorn python-multipart numpy scipy pandas ssqueezepy
-FAST_DATA_DIR=/tmp/fastdata /tmp/fastvenv/bin/python3 "current build/app.py"
-```
+   The overall verdict is the worst muscle, not the mean. A 30-second window is
+   analysed, and the screen says so when the recording is longer. A recording
+   under 15 seconds is not scored.
 
-The app serves on http://localhost:8501. Set `FAST_DATA_DIR` every time. The
-default is `/data`, which fails without root.
-
-## Running with Docker
-
-```bash
-cd "current build"
-docker compose up --build -d
-```
-
-The named volume `fast_data` holds the SQLite database at `/data/fast.db`.
-Without that volume every saved profile and result disappears on the next deploy.
-
-## Routes
-
-The page embedded in `app.py` is the only client. Every route below is called by
-the script inside that page, on the same origin. Nothing else calls them, and the
-server publishes no route listing of its own.
-
-- `POST /upload` reads a recording and returns the detected channels
-- `POST /analyze` runs FAST on the selected muscles
-- `GET /profiles`, `POST /profiles`, `POST /profiles/verify`,
-  `DELETE /profiles/{id}` handle athlete profiles and their optional 4 digit PIN
-- `POST /save` stores one assessment against a profile
-- `GET /history?profile_id=N` returns the last 50 assessments, newest first
-- `GET /demo.mp4` and `GET /demo_recording.csv` serve the assets behind the home
-  screen demo and the "Try demo data" button
-
-Profiles live in SQLite, created with stdlib `sqlite3` only. The PIN is stored as
-`sha256('fast|' + pin)`.
+`bowen_centroid.py` also reports the LOW 8–23 Hz centroid for each muscle. It is
+shown, but it does not drive the traffic light.
 
 ## Layout
 
 ```
-current build/
-  app.py              the server, with the whole UI embedded in it
-  bowen_centroid.py   Bowen centroid and the FAST band pipeline
-  make_demo_data.py   regenerates the synthetic demo recording
-  requirements.txt    runtime dependencies
-  Dockerfile          Python 3.12, CPU only
-  docker-compose.yml  container signal-analyzer, port 8501
-  .env.example        copy to .env and set the address the app binds to
-  demo.mp4            14 s screen recording on the home screen
-  demo_recording.csv  synthetic recording behind "Try demo data"
+app.py            HTTP routes, page, security headers
+engine.py         the method: resample, transform, classify, verdict
+ingest.py         file parsing: CSV, TXT, MAT, sampling rate, channel matching
+store.py          SQLite profiles and results, PIN hashing, session tokens
+version.py        what is running
+bowen_centroid.py LOW 8–23 Hz centroid
+templates/        index.html
+static/           app.css, app.js, theme.js, icon.svg, vendor/musclemap.min.js
+tests/            pytest: engine and ingest
+scripts/          compare_transform.py, the aggregate-vs-single evidence
+ENGINE-NOTES.md   why the method runs one transform, with the measurements
 ```
 
-## Deployment
+## Run locally
 
-The app runs as a Docker container serving port 8501, built from
-`current build/Dockerfile`. The deployment setup for this instance is not
-documented in this repository.
+```bash
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -r "current build/requirements.txt"
+pip install pytest
 
-## Third-party
+FAST_DATA_DIR=/tmp/fast-data python3 -m uvicorn app:app --port 8501
+```
 
-The muscle map uses MuscleMapJS, MIT licensed and bundled into `app.py`. See
-`THIRD_PARTY_NOTICES.md`.
+with `cd "current build"` first, or set `PYTHONPATH`. Then open
+http://127.0.0.1:8501.
 
-## Licence
+Tests:
 
-MIT. See `LICENSE`.
+```bash
+python3 -m pytest tests -q
+```
+
+## Deploy
+
+```bash
+cd "current build"
+FAST_BIND_IP=127.0.0.1 docker compose up -d --build
+```
+
+`FAST_BIND_IP` is the address the container publishes on. The default is
+loopback: Docker's published ports bypass UFW, so binding every interface puts
+the app on the internet directly, around whatever proxy terminates TLS. Set it to
+the address your proxy reaches.
+
+The database lives on the `fast_data` volume at `/data`. Uploads are held in
+memory only and expire after 30 minutes.
+
+The running version is at `/healthz` and on the Profile screen. Stamp the commit
+into the image with `FAST_BUILD=$(git rev-parse --short HEAD)`.
+
+## Profiles and privacy
+
+A profile PIN gates a session token, and the token is required by `/history`,
+`/save` and deleting a profile. PINs are stored with `scrypt` and a per-profile
+salt, five wrong attempts per profile are throttled for fifteen minutes, and
+profiles created by earlier builds (unsalted hash) are accepted once and
+upgraded.
+
+The profile list is visible to anyone who can reach the page, because choosing a
+profile is how you sign in. Names are the only thing it exposes.
+
+## Limits
+
+- One analysis at a time is allowed two in parallel; a channel costs about
+  0.7 s, and eight about 6 s.
+- Uploads are capped at 25 MB.
+- The interface has no accounts, no email, and no recovery: a forgotten PIN means
+  a new profile. Say so if that matters for your use.
