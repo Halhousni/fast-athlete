@@ -1,7 +1,10 @@
+# Runtime dependencies. Left unpinned, as the owner prefers, except wsstpy: it is
+# not on PyPI yet and the transform it produces is part of the method, so it is
+# pinned to a commit. The engine version used for a result is stored with it.
 fastapi
 uvicorn
 python-multipart
 numpy
 scipy
-ssqueezepy
 pandas
+wsstpy @ git+https://github.com/Halhousni/wsstpy@9d8f81b
