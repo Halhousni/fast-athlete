@@ -110,5 +110,71 @@ def test_analyse_channel_returns_centroid_and_window():
     sig = tone(20.0, 1000.0, seconds=45.0)
     result = engine.analyse_channel(sig, 1000.0, 'VL')
     assert result['analysed_seconds'] == pytest.approx(30.0, abs=0.1)
-    assert result['centroid'] is not None
-    assert 8 <= result['centroid'] <= 23
+    assert result['centroid'] == pytest.approx(20.0, abs=1.0)
+
+
+# ── the verdict itself ───────────────────────────────────────────────────────
+# Without these, swapping `mif_baseline - mif_median` for the reverse would turn
+# every fatigued muscle green and the suite would still pass.
+
+def stationary(freq_hz: float, fs: float, seconds: float = 30.0) -> np.ndarray:
+    return tone(freq_hz, fs, seconds)
+
+
+def slowing(fs: float = 200.0, seconds: float = 30.0,
+            start_hz: float = 25.0, end_hz: float = 15.0) -> np.ndarray:
+    """A contraction whose spectral content slides down: what fatigue looks like."""
+    n = int(fs * seconds)
+    t = np.arange(n) / fs
+    freq = np.linspace(start_hz, end_hz, n)
+    phase = 2 * np.pi * np.cumsum(freq) / fs
+    return np.sin(phase)
+
+
+def test_a_steady_contraction_is_recovered():
+    result = engine.analyse_channel(stationary(20.0, 200.0), 200.0, 'VL')
+    assert result['nfi'] == pytest.approx(0.0, abs=5.0)
+    assert result['status'] == 'green'
+    assert result['score'] >= 70
+
+
+def test_a_slowing_contraction_is_not_green():
+    result = engine.analyse_channel(slowing(), 200.0, 'VL')
+    assert result['nfi'] > 10, f"NFI came out {result['nfi']}"
+    assert result['status'] in ('amber', 'red')
+
+
+def test_a_steep_slowdown_is_red():
+    """A contraction that drops quickly and stays low.
+
+    The statistic compares the median of the recording with the median of the
+    first five seconds, so a slow linear sweep only reaches about a third of its
+    drop (the median of a ramp is its midpoint). A step-like loss of frequency
+    is what reads as severe fatigue.
+    """
+    fs, seconds = 200.0, 30.0
+    n = int(fs * seconds)
+    t = np.arange(n) / fs
+    freq = 12.0 + 23.0 * np.exp(-t / 2.0)
+    sig = np.sin(2 * np.pi * np.cumsum(freq) / fs)
+    result = engine.analyse_channel(sig, fs, 'VL')
+    assert result['status'] == 'red', f"NFI came out {result['nfi']}"
+    assert result['score'] < 40
+
+
+def test_the_bundled_demo_gives_the_designed_verdict():
+    """The demo was built with a known amount of fatigue in four muscles."""
+    import ingest
+    path = os.path.join(os.path.dirname(__file__), '..', 'current build',
+                        'demo_recording.csv')
+    # The demo has no time column, so the rate is supplied, as the page does.
+    parsed = ingest.load(open(path, 'rb').read(), 'demo_recording.csv', fs=1000.0)
+    got = {}
+    for channel in parsed.channels:
+        if channel['drop_reason']:
+            continue
+        got[channel['name']] = engine.analyse_channel(channel['data'], parsed.fs,
+                                                      channel['name'])
+    expected = {'VL': 'green', 'VM': 'green', 'RF': 'green', 'TA': 'green',
+                'BF': 'amber', 'ST': 'amber', 'GM': 'red', 'GL': 'red'}
+    assert {k: v['status'] for k, v in got.items()} == expected

@@ -39,6 +39,9 @@ app.mount('/static', StaticFiles(directory=BASE / 'static'), name='static')
 store = Store(DATA_DIR)
 sessions = SessionStore()
 analyse_slots = threading.BoundedSemaphore(MAX_ANALYSES_AT_ONCE)
+# Reading a file is the expensive part of an upload and it runs in the
+# threadpool, so it is capped as well as the analysis.
+ingest_slots = threading.BoundedSemaphore(MAX_ANALYSES_AT_ONCE)
 
 
 # ── models ───────────────────────────────────────────────────────────────────
@@ -65,12 +68,12 @@ class AnalyzeIn(BaseModel):
 
 class ResultIn(BaseModel):
     id: str = Field(max_length=64)
-    name: str = ''
-    column: str = ''
-    status: str = 'grey'
-    score: int = 0
+    name: str = Field(default='', max_length=80)
+    column: str = Field(default='', max_length=200)
+    status: str = Field(default='grey', max_length=8)
+    score: int = Field(default=0, ge=0, le=100)
     nfi: float | None = None
-    tip: str = ''
+    tip: str = Field(default='', max_length=300)
     centroid: float | None = None
 
 
@@ -134,6 +137,7 @@ async def healthz():
 @app.post('/upload')
 def upload(file: UploadFile = File(...), fs: float | None = Form(default=None)):
     started = time.time()
+    filename = (file.filename or '')[:120]
     chunks, total = [], 0
     while True:
         chunk = file.file.read(1024 * 1024)
@@ -147,17 +151,22 @@ def upload(file: UploadFile = File(...), fs: float | None = Form(default=None)):
         chunks.append(chunk)
     content = b''.join(chunks)
 
+    if not ingest_slots.acquire(timeout=60):
+        return _json({'error': 'The server is busy reading files. Try again in a '
+                               'moment.'}, status=503)
     try:
-        parsed = ingest.load(content, file.filename or '')
+        # The athlete's rate goes in, so a file without one can still have its
+        # gaps interpolated in seconds rather than in samples.
+        parsed = ingest.load(content, filename,
+                             float(fs) if fs is not None else None)
     except ingest.IngestError as exc:
         return _json({'error': str(exc)}, status=400)
+    finally:
+        ingest_slots.release()
 
-    if fs is not None and ingest.FS_MIN <= fs <= ingest.FS_MAX:
-        rate, rate_source = float(fs), 'provided'
-    elif parsed.fs:
-        rate, rate_source = parsed.fs, parsed.fs_source
-    else:
-        rate, rate_source = None, 'none'
+    rate, rate_source = parsed.fs, parsed.fs_source
+    if rate is None:
+        rate_source = 'none'
 
     usable = [c for c in parsed.channels if c['drop_reason'] is None]
     if not usable:
@@ -168,11 +177,11 @@ def upload(file: UploadFile = File(...), fs: float | None = Form(default=None)):
 
     duration = max(len(c['data']) for c in usable) / rate if rate else None
     sid = sessions.put({c['name']: c['data'].astype(np.float32) for c in usable},
-                       rate or 0.0, file.filename or '', parsed.notes)
+                       rate or 0.0, filename, parsed.notes)
 
     return {
         'session': sid,
-        'filename': file.filename or '',
+        'filename': filename,
         'fs': rate,
         'fs_source': rate_source,
         'cols': [c['name'] for c in usable],
@@ -222,7 +231,9 @@ def analyze(body: AnalyzeIn):
                               analysed_seconds=round(len(data) / session['fs'], 1))
             result['id'] = muscle.id
             result['column'] = muscle.column
-            results[muscle.id] = result
+            # Keyed by column, which is unique per upload: two channels
+            # can map to the same muscle id.
+            results[muscle.column] = result
     finally:
         analyse_slots.release()
 
@@ -239,14 +250,29 @@ async def list_profiles():
     return {'profiles': store.list_profiles()}
 
 
+@app.get('/profiles/me')
+async def whoami(request: Request):
+    pid = _profile_id(request)
+    if pid is None:
+        return _json({'error': 'Not signed in'}, status=401)
+    row = store.profile(pid)
+    if not row:
+        return _json({'error': 'Not signed in'}, status=401)
+    return {'id': row['id'], 'name': row['name']}
+
+
+# These two routes are plain `def` on purpose: scrypt takes about 50 ms and
+# would block every other request if it ran on the event loop.
 @app.post('/profiles')
-async def create_profile(body: ProfileIn):
+def create_profile(body: ProfileIn):
     name = body.name.strip()
     if not _valid_name(name):
         return _json({'error': 'Use a name of up to 30 characters'}, status=400)
     pin = (body.pin or '').strip() or None
     if pin and not _valid_pin(pin):
         return _json({'error': 'The PIN must be four digits'}, status=400)
+    if store.profile_by_name(name):
+        return _json({'error': 'That name is already taken'}, status=409)
     try:
         created = store.create_profile(name, pin)
     except StoreError as exc:
@@ -255,17 +281,20 @@ async def create_profile(body: ProfileIn):
 
 
 @app.post('/profiles/verify')
-async def verify_profile(body: VerifyIn):
+def verify_profile(body: VerifyIn, request: Request):
     row = store.profile(body.id)
     if not row:
         return _json({'error': 'Profile not found'}, status=404)
-    if store.attempts.blocked(body.id):
+    # Keyed by client as well as profile, so one person guessing cannot lock the
+    # owner out of their own profile.
+    key = f'{body.id}:{request.client.host if request.client else "?"}'
+    if store.attempts.blocked(key):
         return _json({'error': 'Too many wrong PINs. Wait fifteen minutes.'},
                      status=429)
     if row['pin_hash']:
         pin = (body.pin or '').strip()
         if not _valid_pin(pin):
-            store.attempts.record(body.id)
+            store.attempts.record(key)
             return _json({'error': 'Wrong PIN'}, status=403)
         if row['pin_salt']:
             ok = verify_pin(pin, row['pin_hash'], row['pin_salt'])
@@ -276,13 +305,15 @@ async def verify_profile(body: VerifyIn):
             if ok:
                 store.upgrade_pin(row['id'], pin)
         if not ok:
-            store.attempts.record(body.id)
+            store.attempts.record(key)
             return _json({'error': 'Wrong PIN'}, status=403)
-    store.attempts.clear(body.id)
+    store.attempts.clear(key)
     token = store.issue_token(body.id)
     response = _json({'id': row['id'], 'name': row['name']})
+    secure = (request.url.scheme == 'https'
+              or request.headers.get('x-forwarded-proto') == 'https')
     response.set_cookie(COOKIE, token, max_age=3600, httponly=True,
-                        samesite='lax', path='/')
+                        samesite='lax', path='/', secure=secure)
     return response
 
 
@@ -322,13 +353,18 @@ async def save_result(body: SaveIn, request: Request):
         return _json({'error': 'Nothing to save'}, status=400)
 
     detail_results = [r.model_dump() for r in body.results]
+    for row in detail_results:
+        # The score drives the colour, always. A client that sends green with a
+        # score of 5 is stored as red.
+        row['status'] = ('grey' if row.get('nfi') is None
+                         else engine.status_from_score(row['score']))
     verdict = engine.overall(detail_results)
     if verdict['status'] == 'grey':
         return _json({'error': 'Nothing was measured, so nothing was saved'},
                      status=400)
 
     rid = store.save_result(body.profile_id, verdict['mean_score'], verdict['status'],
-                            dict(filename=body.filename, results=detail_results),
+                            dict(filename=body.filename[:120], results=detail_results),
                             engine.ENGINE_VERSION)
     return {'id': rid, 'avg_score': verdict['mean_score'], 'status': verdict['status']}
 
@@ -345,6 +381,21 @@ async def history(request: Request, profile_id: int | None = None):
 
 
 # ── security headers ─────────────────────────────────────────────────────────
+
+# Registered last, so it wraps everything else and runs before the multipart
+# parser touches the body: Starlette spools a file part to a temporary file with
+# no size limit, so a huge POST would fill the container before /upload could
+# answer 413.
+@app.middleware('http')
+async def body_limit(request: Request, call_next):
+    if request.url.path == '/upload':
+        length = request.headers.get('content-length', '')
+        if length.isdigit() and int(length) > MAX_UPLOAD_BYTES + 65536:
+            return _json({'error': f'That file is larger than '
+                                   f'{MAX_UPLOAD_BYTES // (1024 * 1024)} MB. '
+                                   f'Export a shorter recording.'}, status=413)
+    return await call_next(request)
+
 
 @app.middleware('http')
 async def security_headers(request: Request, call_next):
