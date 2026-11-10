@@ -32,7 +32,7 @@
         <p class="ask"><i></i><span id="home-ask">No check yet today</span></p>
         <h1 id="home-title">Check your calf.</h1>
 
-        <p class="verdict" id="home-verdict" hidden>
+        <p class="home-verdict" id="home-verdict" hidden>
           <i></i><span id="home-verdict-text"></span>
         </p>
 
@@ -44,13 +44,16 @@
           <span class="hint">Saved to your history</span>
         </div>
 
+        <p class="safety">Sharp pain is not fatigue. If it hurts, stop and get it looked
+          at, even if this says ready.</p>
+
         <div class="more" id="home-more" hidden>
-          <button class="more-btn" id="why" type="button">Why <span id="why-word">red</span>?</button>
+          <button class="more-btn" id="why" type="button" aria-expanded="false"
+                  aria-controls="why-body">Why <span id="why-word">rest</span>?</button>
           <div class="answer" id="why-body">
             <p id="why-plain"></p>
-            <p class="safety">Sharp pain is not fatigue. If it hurts, stop and get it
-              looked at, whatever colour this shows.</p>
-            <button class="det" id="det" type="button">The numbers behind it</button>
+            <button class="det" id="det" type="button" aria-expanded="false"
+                    aria-controls="det-body">The numbers behind it</button>
             <dl class="det-list" id="det-body"></dl>
           </div>
         </div>

@@ -121,6 +121,7 @@ function toggleTheme() {
   document.documentElement.dataset.theme = next;
   try { localStorage.setItem('fast_theme', next); } catch (e) { /* ignore */ }
   if (state.stage === 'results') renderResults();
+  if (state.screen === 'home') renderHome();
 }
 
 // ── navigation ──────────────────────────────────────────────────────────────
@@ -278,7 +279,8 @@ async function analyse() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ session: up.session, muscles }),
     });
-    state.analysis = { ...data, at: Date.now() };
+    state.analysis = { ...data, at: Date.now(), sample: !!state.samplePending };
+    state.samplePending = false;
     state.checkedAt = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     state.saved = false;
     setStage('results');
@@ -527,6 +529,7 @@ function buildMap(results, byColumn) {
 // ── saving ──────────────────────────────────────────────────────────────────
 async function saveIfPossible() {
   if (!state.profile || !state.analysis || state.saved) return;
+  if (state.analysis.sample) return;
   const results = Object.values(state.analysis.results).map((r) => ({
     id: r.id, column: r.column, status: r.status, score: r.score,
     nfi: r.nfi, tip: r.tip, level: r.level,
@@ -894,13 +897,15 @@ function planeCard(results, title) {
 
 // ── home: the dial ─────────────────────────────────────────────────────────
 // One question, one answer. The ring is the traffic light bent into a circle:
-// three named zones, and a marker at where today's reading landed.
+// three named zones, and a marker where today's reading landed. The zone edges
+// follow the engine's own cut-offs: 70 and above is ready, 40 to 69 is go easy,
+// below 40 is rest.
 const DIAL = { size: 1200, radius: 552 };
-const ZONES = [[0.00, 0.34, '--ok', 'READY'],
-               [0.34, 0.67, '--warn', 'EASY'],
-               [0.67, 1.00, '--bad', 'REST']];
-const VERDICT_WORD = { green: 'ready', amber: 'ease off', red: 'rest it', grey: 'no reading' };
-const DIAL_WORD = { green: 'READY', amber: 'EASY', red: 'REST', grey: '—' };
+const ZONE_EDGES = [0.00, 0.30, 0.60, 1.00];   // score 100..70, 69..40, 39..0
+const ZONE_TOKENS = ['--ok', '--warn', '--bad'];
+const ZONE_WORDS = ['READY', 'EASY', 'REST'];
+const VERDICT_WORD = { green: 'ready', amber: 'go easy', red: 'rest' };
+const DIAL_WORD = { green: 'READY', amber: 'EASY', red: 'REST' };
 const RANK = { red: 3, amber: 2, green: 1, grey: 0 };
 
 function drawDial(canvas, strip, opts) {
@@ -909,94 +914,125 @@ function drawDial(canvas, strip, opts) {
   const status = options.status || 'grey';
   const W = DIAL.size, cx = W / 2, cy = W / 2, R = DIAL.radius;
   canvas.width = W; canvas.height = W;
+
+  // Everything is drawn for a 1200 px canvas and shown smaller, so type and
+  // strokes are scaled up by however much the display shrinks them.
+  const shown = canvas.clientWidth || 560;
+  const k = Math.min(4, Math.max(1.35, W / shown));
   const ctx = canvas.getContext('2d');
   ctx.clearRect(0, 0, W, W);
-
-  // three zones
-  for (const [from, to, token, word] of ZONES) {
-    const a0 = -Math.PI / 2 + from * Math.PI * 2;
-    const a1 = -Math.PI / 2 + to * Math.PI * 2;
-    ctx.beginPath(); ctx.arc(cx, cy, R, a0, a1);
-    ctx.strokeStyle = tokenRgb(token);
-    ctx.globalAlpha = options.example ? 0.10 : (word === DIAL_WORD[status] ? 0.42 : 0.20);
-    ctx.lineWidth = 14; ctx.stroke();
-    ctx.globalAlpha = 1;
-    const mid = (a0 + a1) / 2;
-    ctx.fillStyle = cssVar('--text-2');
-    ctx.font = '600 17px ui-monospace, SFMono-Regular, Menlo, monospace';
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText(word, cx + Math.cos(mid) * (R + 40), cy + Math.sin(mid) * (R + 40));
-  }
-
-  // the marker: how spent the muscle is, not how far through a task
-  if (!options.example && status !== 'grey') {
-    const frac = Math.min(0.97, 1 - Math.max(0, Math.min(1, (options.score || 0) / 100)));
-    const a = -Math.PI / 2 + frac * Math.PI * 2;
-    const x = cx + Math.cos(a) * R, y = cy + Math.sin(a) * R;
-    ctx.beginPath(); ctx.arc(x, y, 11, 0, Math.PI * 2);
-    ctx.fillStyle = cssVar('--text'); ctx.fill();
-    ctx.beginPath(); ctx.arc(x, y, 5.5, 0, Math.PI * 2);
-    ctx.fillStyle = tokenRgb(VERDICT_CLASS[status]); ctx.fill();
-  }
-
-  // faint concentric rules
-  for (let r = 140; r <= 520; r += 40) {
-    ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2);
-    ctx.strokeStyle = cssVar('--line'); ctx.globalAlpha = 0.5;
-    ctx.lineWidth = 1.2; ctx.stroke(); ctx.globalAlpha = 1;
-  }
+  const fg = cssVar('--text');
 
   // the recording, engraved: one hair per instant, radius = its frequency
   if (strip && strip.bytes) {
     const { cols, rows, bytes } = strip;
-    const step = window.innerWidth < 700 ? 2 : 1;
-    for (let k = 0; k < cols; k += step) {
+    const alpha = options.sample ? 0.11 : 0.30;
+    for (let n = 0; n < cols; n += 1) {
       let best = 0, row = 0;
       for (let i = 0; i < rows; i += 1) {
-        const v = bytes[i * cols + k];
+        const v = bytes[i * cols + n];
         if (v > best) { best = v; row = i; }
       }
-      const theta = (k / cols) * Math.PI * 2 - Math.PI / 2;
+      const theta = (n / cols) * Math.PI * 2 - Math.PI / 2;
       const f = row / (rows - 1);
-      const r = 150 + f * 400;
-      const len = 74 + (best / 255) * 130;
-      const inner = r - len * 0.45, outer = r + len * 0.55;
+      const r = 140 + f * 350;
+      const len = 62 + (best / 255) * 120;
+      const inner = r - len * 0.45, outer = Math.min(r + len * 0.55, R - 26);
       const g = ctx.createLinearGradient(cx + Math.cos(theta) * inner, cy + Math.sin(theta) * inner,
                                          cx + Math.cos(theta) * outer, cy + Math.sin(theta) * outer);
-      g.addColorStop(0, 'rgba(250,250,255,.04)');
-      g.addColorStop(0.5, `rgba(250,250,255,${(0.26 + (best / 255) * 0.62).toFixed(3)})`);
-      g.addColorStop(1, 'rgba(250,250,255,.03)');
+      g.addColorStop(0, 'rgba(250,250,255,.03)');
+      g.addColorStop(0.5, `rgba(250,250,255,${(alpha + (best / 255) * 0.55).toFixed(3)})`);
+      g.addColorStop(1, 'rgba(250,250,255,.02)');
       ctx.beginPath();
       ctx.moveTo(cx + Math.cos(theta) * inner, cy + Math.sin(theta) * inner);
       ctx.lineTo(cx + Math.cos(theta) * outer, cy + Math.sin(theta) * outer);
-      ctx.strokeStyle = g; ctx.lineWidth = 1.5; ctx.stroke();
+      ctx.strokeStyle = g; ctx.lineWidth = 1.5 * k; ctx.stroke();
     }
     // the median frequency, in the verdict's colour
     ctx.beginPath();
-    (strip.mdf || []).forEach((f, k) => {
+    (strip.mdf || []).forEach((f, n) => {
       if (!f) return;
-      const theta = (k / cols) * Math.PI * 2 - Math.PI / 2;
-      const r = 150 + ((f - (strip.f0 || 1)) / ((strip.f1 || 35) - (strip.f0 || 1))) * 400;
+      const theta = (n / cols) * Math.PI * 2 - Math.PI / 2;
+      const r = 140 + ((f - (strip.f0 || 1)) / ((strip.f1 || 35) - (strip.f0 || 1))) * 350;
       const x = cx + Math.cos(theta) * r, y = cy + Math.sin(theta) * r;
-      k ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+      n ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
     });
-    ctx.strokeStyle = cssVar(VERDICT_CLASS[status] || '--grey');
-    ctx.globalAlpha = options.example ? 0.35 : 0.95;
-    ctx.lineWidth = 3.2; ctx.stroke(); ctx.globalAlpha = 1;
+    ctx.strokeStyle = cssVar(ZONE_TOKENS[(RANK[status] || 1) - 1] || '--grey');
+    ctx.globalAlpha = options.sample ? 0.28 : 0.95;
+    ctx.lineWidth = 3.4 * k; ctx.stroke(); ctx.globalAlpha = 1;
   }
+
+  // faint concentric rules
+  for (let r = 150; r <= 500; r += 50) {
+    ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.strokeStyle = cssVar('--line'); ctx.globalAlpha = 0.45;
+    ctx.lineWidth = 1.2 * k; ctx.stroke(); ctx.globalAlpha = 1;
+  }
+
+  // the three zones
+  for (let z = 0; z < 3; z += 1) {
+    const from = ZONE_EDGES[z], to = ZONE_EDGES[z + 1];
+    const a0 = -Math.PI / 2 + from * Math.PI * 2;
+    const a1 = -Math.PI / 2 + to * Math.PI * 2;
+    ctx.beginPath(); ctx.arc(cx, cy, R, a0, a1);
+    ctx.strokeStyle = cssVar(ZONE_TOKENS[z]);
+    ctx.globalAlpha = options.sample ? 0.12 : (ZONE_WORDS[z] === DIAL_WORD[status] ? 0.55 : 0.22);
+    ctx.lineWidth = 14 * k; ctx.stroke();
+    ctx.globalAlpha = 1;
+    const mid = (a0 + a1) / 2;
+    ctx.fillStyle = cssVar('--text-2');
+    ctx.font = `600 ${Math.round(15 * k)}px ui-monospace, SFMono-Regular, Menlo, monospace`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(ZONE_WORDS[z], cx + Math.cos(mid) * (R - 60), cy + Math.sin(mid) * (R - 60));
+  }
+
+  // the marker: how spent the muscle is, kept inside its own zone so it never
+  // sits on a seam and never claims a precision the score does not have
+  if (!options.sample && status !== 'grey') {
+    const score = Math.max(0, Math.min(100, options.score || 0));
+    let lo = 0, hi = 0.30, frac = 0;
+    if (status === 'red') { lo = 0.60; hi = 0.94; frac = (39 - Math.min(score, 39)) / 39; }
+    else if (status === 'amber') { lo = 0.32; hi = 0.58; frac = (69 - score) / 29; }
+    else { lo = 0.02; hi = 0.28; frac = (100 - score) / 30; }
+    const spent = lo + (hi - lo) * Math.max(0, Math.min(1, frac));
+    const a = -Math.PI / 2 + spent * Math.PI * 2;
+    const x = cx + Math.cos(a) * R, y = cy + Math.sin(a) * R;
+    ctx.beginPath(); ctx.arc(x, y, 12 * k, 0, Math.PI * 2);
+    ctx.fillStyle = fg; ctx.fill();
+    ctx.beginPath(); ctx.arc(x, y, 6 * k, 0, Math.PI * 2);
+    ctx.fillStyle = cssVar(ZONE_TOKENS[(RANK[status] || 1) - 1] || '--grey'); ctx.fill();
+  }
+
+  // a soft ground behind the verdict, so the engraving never runs through it
+  ctx.globalAlpha = 0.82;
+  ctx.fillStyle = cssVar('--bg');
+  ctx.beginPath(); ctx.arc(cx, cy, 262, 0, Math.PI * 2); ctx.fill();
+  ctx.globalAlpha = 1;
 
   // subject, verdict, age -- read as one sentence
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.fillStyle = cssVar('--text-3');
-  ctx.font = '500 24px ui-monospace, SFMono-Regular, Menlo, monospace';
-  ctx.fillText((options.subject || '').toUpperCase(), cx, cy - 78);
-  ctx.fillStyle = cssVar('--text');
-  ctx.font = `300 ${String(options.word || '').length > 5 ? 58 : 96}px `
+  ctx.font = `500 ${Math.round(22 * k)}px ui-monospace, SFMono-Regular, Menlo, monospace`;
+  ctx.fillText((options.subject || '').toUpperCase(), cx, cy - 96 * Math.min(k, 2));
+  const word = options.word || '';
+  ctx.fillStyle = fg;
+  ctx.font = `300 ${Math.round((word.length > 6 ? 56 : 92) * Math.min(k, 2.2))}px `
     + '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
-  ctx.fillText(options.word || '', cx, cy + 8);
+  ctx.fillText(word, cx, cy + 6);
   ctx.fillStyle = cssVar('--text-3');
-  ctx.font = '400 21px ui-monospace, SFMono-Regular, Menlo, monospace';
-  ctx.fillText(options.foot || '', cx, cy + 78);
+  ctx.font = `400 ${Math.round(19 * k)}px ui-monospace, SFMono-Regular, Menlo, monospace`;
+  ctx.fillText(options.foot || '', cx, cy + 96 * Math.min(k, 2));
+
+  // a sample is never dressed as a reading
+  if (options.sample && !options.word) {
+    ctx.save();
+    ctx.translate(cx, cy + 150 * Math.min(k, 2));
+    ctx.fillStyle = cssVar('--text-3');
+    ctx.font = `600 ${Math.round(14 * k)}px ui-monospace, SFMono-Regular, Menlo, monospace`;
+    ctx.textAlign = 'center';
+    ctx.fillText('SAMPLE', 0, 0);
+    ctx.restore();
+  }
 }
 
 // The word an athlete uses, not the one on the electrode.
@@ -1013,117 +1049,189 @@ function muscleName(result) {
     const match = up.muscles.find((m) => m.column === result.column && m.recognised);
     if (match && match.name) return match.name;
   }
-  return result.id || 'muscle';
+  return result.name || result.id || 'muscle';
 }
 
 const HOME_COPY = {
-  red: (name) => `Your ${name} is still showing fatigue. Skip it today and check `
-    + 'again tomorrow before you load it.',
-  amber: (name) => `Your ${name} is carrying some fatigue. Keep the volume down `
-    + 'today and check again tomorrow.',
-  green: (name) => `Your ${name} has recovered. Load it as planned today.`,
+  red: (n) => `Your ${n} is showing fatigue. Rest it today, or keep it very light, `
+    + 'and check again tomorrow.',
+  amber: (n) => `Your ${n} is carrying some fatigue. Keep the volume down today `
+    + 'and check again tomorrow.',
+  green: (n) => `Your ${n} shows no sign of fatigue. Train as planned, and stop if `
+    + 'anything hurts.',
 };
 
 function whyPlain(result) {
-  const slow = Math.abs(Math.round(result.delta_mdf || 0));
-  const strong = Math.round(result.delta_rms || 0);
-  const tail = result.status === 'red'
-    ? 'That combination means it had not recovered.'
-    : result.status === 'amber'
-      ? 'That combination means it has started to tire.'
-      : 'Neither moved much, so there is no sign of fatigue.';
-  return `During your 30-second hold the signal got ${slow} % slower and `
-    + `${strong} % stronger. A tired muscle does both. ${tail}`;
+  const mdf = Number(result.delta_mdf);
+  const rms = Number(result.delta_rms);
+  if (!Number.isFinite(mdf) || !Number.isFinite(rms)) {
+    return 'This reading did not have enough clean signal to separate the two '
+      + 'changes, so only the overall picture is reported.';
+  }
+  const shift = mdf < 0 ? `${Math.abs(Math.round(mdf))} % lower` : `${Math.round(mdf)} % higher`;
+  const size = rms > 0 ? `${Math.round(rms)} % bigger` : `${Math.abs(Math.round(rms))} % smaller`;
+  if (result.status === 'green') {
+    return `The signal barely moved over the hold (${shift}, ${size}), which is what a `
+      + 'fresh muscle looks like.';
+  }
+  const tail = result.status === 'amber'
+    ? 'That pattern points to fatigue starting.'
+    : 'That pattern points to fatigue.';
+  return `Over your hold the signal shifted to ${shift} frequencies and got ${size}. `
+    + `Both happen as a muscle tires. ${tail}`;
+}
+
+// ── what state is the home screen in ───────────────────────────────────────
+// none        no check to show
+// sample      the bundled recording, never presented as the athlete's own
+// unreadable  a check ran and nothing could be measured
+// measured    a real reading
+function homeState() {
+  const analysis = state.analysis;
+  const results = analysis ? Object.values(analysis.results || {}) : [];
+  const scored = results
+    .filter((r) => ['green', 'amber', 'red'].includes(r.status))
+    .sort((a, b) => ((RANK[b.status] || 0) - (RANK[a.status] || 0))
+      || ((a.score || 0) - (b.score || 0)));
+  const worst = scored[0] || null;
+  if (worst && analysis && analysis.sample) return { mode: 'sample', worst, results };
+  if (worst) return { mode: 'measured', worst, results };
+  if (analysis && results.length) return { mode: 'unreadable', worst: null, results };
+  return { mode: 'none', worst: null, results };
 }
 
 async function renderHome() {
-  const analysis = state.analysis;
-  const results = analysis ? Object.values(analysis.results || {}) : [];
-  const scored = results.filter((r) => ['green', 'amber', 'red'].includes(r.status));
-  const worst = scored.sort((a, b) => (RANK[b.status] || 0) - (RANK[a.status] || 0))[0] || null;
+  const { mode, worst, results } = homeState();
+  const hasCheck = mode === 'measured' || mode === 'sample' || mode === 'unreadable';
+  const status = worst ? worst.status : 'grey';
+  const name = worst ? muscleName(worst) : 'calf';
+  const plain = worst ? plainName(worst) : 'calf';
+  const seconds = worst && worst.analysed_seconds
+    ? Math.round(worst.analysed_seconds) : null;
 
   let strip = worst && worst.strip && worst.strip.grid ? worst.strip : null;
-  let example = false;
   if (!strip) {
     try {
       const demo = await loadStrip();
       strip = Object.assign({}, demo);
-      example = true;
     } catch (e) { strip = null; }
   }
   if (strip && strip.grid && !strip.bytes) {
     strip.bytes = Uint8Array.from(atob(strip.grid), (c) => c.charCodeAt(0));
   }
 
-  const name = worst ? muscleName(worst) : 'calf';
-  const plain = worst ? plainName(worst) : 'calf';
-  const status = worst ? worst.status : 'grey';
+  const ask = $('#home-ask'), title = $('#home-title'), lead = $('#home-lead');
+  const verdict = $('#home-verdict'), more = $('#home-more');
 
-  $('#home-ask').textContent = worst
-    ? `Checked ${(state.checkedAt || 'just now').toLowerCase()}`
-    : 'No check yet today';
-  $('#home-title').textContent = worst ? `Is your ${plain} ready?` : 'Check your calf.';
-  $('#home-lead').textContent = worst
-    ? HOME_COPY[status](plain)
-    : 'Thirty seconds of signal from one muscle tells you whether it has '
-      + 'recovered enough to load today.';
-
-  const verdict = $('#home-verdict');
-  if (worst) {
-    verdict.hidden = false;
-    verdict.querySelector('i').style.background = cssVar(VERDICT_CLASS[status]);
-    verdict.querySelector('i').style.boxShadow = `0 0 0 4px ${tokenRgb(VERDICT_CLASS[status])}33, `
-      + `0 0 20px ${tokenRgb(VERDICT_CLASS[status])}88`;
-    $('#home-verdict-text').textContent = `Right now: ${VERDICT_WORD[status]}`;
-    $('#home-verdict-text').style.color = cssVar(VERDICT_CLASS[status]);
-  } else {
+  if (mode === 'measured' || mode === 'sample') {
+    ask.textContent = mode === 'sample'
+      ? 'Sample check'
+      : `Checked ${(state.checkedAt || 'just now').toLowerCase()}`;
+    title.textContent = mode === 'sample'
+      ? 'This is the sample.'
+      : `Is your ${plain} ready?`;
+    lead.textContent = mode === 'sample'
+      ? 'A real recording, so you can see how a check reads. Run your own to '
+        + 'replace it.'
+      : HOME_COPY[status](plain);
+    verdict.hidden = mode === 'sample';
+    more.hidden = mode === 'sample';
+  } else if (mode === 'unreadable') {
+    ask.textContent = 'Check attempted';
+    title.textContent = "Couldn't read this recording.";
+    lead.textContent = (results[0] && results[0].tip)
+      || 'The signal was too small or too flat to measure. Check the sensors and try again.';
     verdict.hidden = true;
+    more.hidden = true;
+  } else {
+    ask.textContent = 'No check yet today';
+    title.textContent = 'Check your calf.';
+    lead.textContent = 'Hold one muscle for 30 seconds. We show how tired it looks by '
+      + 'the end.';
+    verdict.hidden = true;
+    more.hidden = true;
   }
 
-  // the why-this-colour panel
-  const more = $('#home-more');
-  more.hidden = !worst;
-  if (worst) {
-    $('#why-word').textContent = { green: 'green', amber: 'amber', red: 'red' }[status];
+  if (!verdict.hidden) {
+    verdict.querySelector('i').style.background = cssVar(VERDICT_CLASS[status]);
+    verdict.querySelector('i').style.boxShadow = '';
+    const text = $('#home-verdict-text');
+    text.textContent = `Today: ${VERDICT_WORD[status]}`;
+    text.style.color = cssVar(VERDICT_CLASS[status]);
+  }
+
+  if (!more.hidden && worst) {
+    $('#why-word').textContent = VERDICT_WORD[status];
     $('#why-plain').textContent = whyPlain(worst);
     const list = $('#det-body');
     list.replaceChildren();
-    const rows = [['Muscle', name],
-                  ['Frequency', `${worst.mdf_start} → ${worst.mdf_end} Hz, ${Math.round(worst.delta_mdf)} %`],
-                  ['Amplitude', `${worst.delta_rms > 0 ? '+' : ''}${Math.round(worst.delta_rms)} % RMS`],
-                  ['Method', 'Zhao et al. 2025']];
+    const rows = [['Muscle', name]];
+    if (Number.isFinite(Number(worst.mdf_start)) && Number.isFinite(Number(worst.mdf_end))) {
+      rows.push(['Signal pitch', `${worst.mdf_start} → ${worst.mdf_end} Hz, `
+        + `${Math.round(worst.delta_mdf)} %`]);
+      rows.push(['Signal size', `${worst.delta_rms > 0 ? '+' : ''}`
+        + `${Math.round(worst.delta_rms)} % (RMS)`]);
+    }
+    if (seconds) rows.push(['Hold', `${seconds} s`]);
+    rows.push(['Method', 'Zhao et al. 2025']);
     for (const [label, value] of rows) {
       list.append(el('dt', { text: label }), el('dd', { text: value }));
     }
   }
 
   drawDial($('#home-disc'), strip, {
-    status, example,
+    status: mode === 'unreadable' ? 'grey' : status,
+    sample: mode === 'sample' || !hasCheck,
     score: worst ? worst.score : 0,
-    subject: example ? 'Example' : plain.toUpperCase(),
-    word: example ? 'NO CHECK' : DIAL_WORD[status],
-    foot: example ? 'NO READING YET' : (state.checkedAt || 'just now').toUpperCase(),
+    subject: mode === 'sample' ? '' : (hasCheck ? plain : ''),
+    word: mode === 'sample' ? 'SAMPLE'
+      : mode === 'unreadable' ? 'NO READ'
+        : (worst ? DIAL_WORD[status] : 'NO CHECK'),
+    foot: mode === 'sample' ? 'NOT YOUR DATA'
+      : hasCheck && seconds ? `${seconds} S HOLD` : '',
   });
-  $('#home-disc-label').textContent = example
-    ? 'example recording · your own check fills this'
-    : 'your own recording · 30 s hold';
+
+  const cta = plain === 'calf' ? 'Check my calf · 30 sec' : `Check my ${plain} · 30 sec`;
+  $('#home-start').textContent = cta;
+  $('#home-start-m').textContent = cta;
+  const hint = document.querySelector('.home-cta .hint');
+  if (hint) hint.textContent = state.profile ? 'Saved to your history' : 'Sign in to save this';
+
+  const disc = $('#home-disc');
+  disc.setAttribute('aria-label', mode === 'measured'
+    ? `${plain}: ${VERDICT_WORD[status]}. Score ${worst ? worst.score : 0} of 100, `
+      + `in the ${ZONE_WORDS[(RANK[status] || 1) - 1]} zone.`
+    : mode === 'sample' ? 'The sample recording, not your data.'
+      : mode === 'unreadable' ? 'This recording could not be measured.'
+        : 'No check yet. The dial fills with your first check.');
+  $('#home-disc-label').textContent = mode === 'measured'
+    ? `your recording${seconds ? ` · ${seconds} s` : ''}`
+    : mode === 'sample' ? 'sample recording, not yours'
+      : mode === 'unreadable' ? '' : '';
 
   // the foot: one dot per check, newest last
   const foot = $('#home-foot');
   foot.replaceChildren();
   const history = (state.history || []).slice(0, 11).reverse();
   const dotStatus = history.length
-    ? history.map((row) => row.status)
-    : (worst ? [status] : []);
+    ? history.map((row) => row.status || 'grey')
+    : (mode === 'measured' ? [status] : []);
   if (!dotStatus.length) {
     foot.append(el('span', { class: 'foot-txt', text: 'No checks yet' }));
     return;
   }
+  const counts = dotStatus.reduce((acc, s) => {
+    acc[s] = (acc[s] || 0) + 1;
+    return acc;
+  }, {});
+  const summary = Object.entries(counts)
+    .map(([s, n]) => `${n} ${ZONE_WORDS[(RANK[s] || 1) - 1].toLowerCase()}`)
+    .join(', ');
   foot.append(el('span', {
     class: 'foot-txt',
     text: dotStatus.length === 1 ? '1 check' : `last ${dotStatus.length} checks`,
   }));
-  const dots = el('span', { class: 'foot-dots' });
+  const dots = el('span', { class: 'foot-dots', role: 'img', 'aria-label': summary });
   for (const s of dotStatus) {
     dots.append(el('i', { style: `background:${cssVar(VERDICT_CLASS[s] || '--grey')}` }));
   }
@@ -1132,7 +1240,6 @@ async function renderHome() {
     foot.append(el('span', { class: 'foot-txt', text: 'newest on the right' }));
   }
 }
-
 
 // ── train ───────────────────────────────────────────────────────────────────
 const CALL = {
@@ -1626,6 +1733,7 @@ function wire() {
       const response = await fetch('/demo_recording.csv');
       if (!response.ok) throw new Error('The sample recording is unavailable');
       const blob = await response.blob();
+      state.samplePending = true;
       uploadFile(new File([blob], 'sample-recording.csv', { type: 'text/csv' }), 1000);
     } catch (error) {
       toast(error.message);
@@ -1647,11 +1755,13 @@ function wire() {
   $('#home-start').addEventListener('click', () => nav('check'));
   $('#home-start-m').addEventListener('click', () => nav('check'));
   $('#why').addEventListener('click', () => {
-    $('#why-body').classList.toggle('open');
-    $('#why').classList.toggle('open');
+    const open = $('#why-body').classList.toggle('open');
+    $('#why').classList.toggle('open', open);
+    $('#why').setAttribute('aria-expanded', String(open));
   });
   $('#det').addEventListener('click', () => {
-    $('#det-body').classList.toggle('open');
+    const open = $('#det-body').classList.toggle('open');
+    $('#det').setAttribute('aria-expanded', String(open));
   });
 
   $('#sheet-close').addEventListener('click', () => { $('#sheet').hidden = true; });

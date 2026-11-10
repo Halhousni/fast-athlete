@@ -581,11 +581,11 @@ canvas.plane { width: 100%; height: auto; display: block; }
   letter-spacing: -.03em; font-weight: 300;
 }
 .home h1 b { font-weight: 500; }
-.verdict {
+.home-verdict {
   display: flex; align-items: center; gap: 12px; margin-top: 24px;
   font-size: 24px; font-weight: 500; letter-spacing: -.01em;
 }
-.verdict i { width: 12px; height: 12px; border-radius: 50%; background: var(--grey); }
+.home-verdict i { width: 12px; height: 12px; border-radius: 50%; background: var(--grey); }
 .home .lead {
   margin-top: 14px; max-width: 40ch; font-size: 15.5px; line-height: 1.62;
   color: var(--text-2);
@@ -608,8 +608,9 @@ canvas.plane { width: 100%; height: auto; display: block; }
 .answer { display: none; margin-top: 2px; max-width: 42ch; }
 .answer.open { display: block; }
 .answer p { font-size: 14.5px; line-height: 1.62; color: var(--text-2); }
-.answer .safety {
-  margin-top: 12px; color: var(--text-2); font-size: 13.5px;
+.home .safety {
+  margin-top: 18px; max-width: 42ch;
+  color: var(--text-2); font-size: 13.5px; line-height: 1.55;
   border-left: 2px solid var(--warn); padding-left: 12px;
 }
 .answer .det {
@@ -628,6 +629,7 @@ canvas.plane { width: 100%; height: auto; display: block; }
 .det-list dd {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 11px; color: var(--text);
+  min-width: 0; overflow-wrap: anywhere;
 }
 
 .disc { display: grid; justify-items: center; }
@@ -654,15 +656,17 @@ canvas.plane { width: 100%; height: auto; display: block; }
 @media (max-width: 940px) {
   .home { grid-template-columns: 1fr; gap: 8px; min-height: 0; }
   .disc { order: -1; }
-  .disc canvas { max-width: 300px; }
+  .disc canvas { max-width: 340px; }
   .home h1 { font-size: 34px; }
-  .verdict { font-size: 19px; margin-top: 18px; }
+  .disc-label { display: none; }
+  .home-verdict { font-size: 19px; margin-top: 18px; }
   .home-cta { display: none; }
   .det-list { margin-bottom: 84px; }
   .mobile-cta {
-    display: block; position: fixed; left: 0; right: 0; bottom: 0; z-index: 60;
-    padding: 12px 16px calc(16px + env(safe-area-inset-bottom));
-    background: linear-gradient(transparent, var(--bg) 40%);
+    display: block; position: fixed; left: 0; right: 0; z-index: 25;
+    bottom: calc(62px + env(safe-area-inset-bottom));
+    padding: 12px 16px;
+    background: linear-gradient(transparent, var(--bg) 45%);
   }
   .mobile-cta button {
     width: 100%; height: 56px; border: 0; border-radius: 12px;
