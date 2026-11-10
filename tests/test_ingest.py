@@ -152,3 +152,54 @@ def test_muscle_matching_prefers_full_names():
 def test_muscle_matching_does_not_match_inside_a_word():
     matched = ingest.match_muscles(['STIM'])
     assert matched[0]['recognised'] is False
+
+# ── regression tests for the second review ──────────────────────────────────
+
+def test_metadata_lines_above_the_header_are_not_the_header():
+    """A 'Sampling rate' line above the header must not become a channel."""
+    body = csv_bytes(emg_frame(2000.0))
+    for prefix, expect_fs in ((b'# Recording\n# Sampling rate: 2048 Hz\n', 2048.0),
+                              (b'Sampling rate: 2000\n', 2000.0),
+                              (b'Device: X\n\n', None)):
+        got = ingest.load(prefix + body, 'rec.csv')
+        names = [c['name'] for c in got.channels]
+        assert names == ['VL', 'VM'], f'{prefix[:24]!r} gave {names}'
+        if expect_fs:
+            assert got.fs == pytest.approx(expect_fs, rel=0.01)
+
+
+def test_channel_names_that_look_like_units_are_kept():
+    """S1, A1, N1 and G1 are channel names, not unit cells."""
+    for channels in (('S1', 'S2'), ('A1', 'A2'), ('N1', 'N2'), ('G1', 'G2')):
+        got = ingest.load(csv_bytes(emg_frame(1000.0, channels=channels)), 'rec.csv')
+        assert [c['name'] for c in got.channels] == list(channels)
+
+
+def test_rounded_time_column_keeps_its_rate():
+    """Four decimals of a 0.000488 s step must not read as 2000 Hz."""
+    n = 6000
+    frame = pd.DataFrame({'Time': np.round(np.arange(n) / 2048.0, 4),
+                          'VL': np.random.RandomState(0).randn(n) * 0.1})
+    got = ingest.load(csv_bytes(frame), 'rec.csv')
+    assert got.fs == pytest.approx(2048.0, rel=0.01)
+
+
+def test_mat_with_one_channel_and_a_short_side_array():
+    """A markers or gains array must not truncate the channel."""
+    buf = io.BytesIO()
+    scipy.io.savemat(buf, {'fs': 2000.0,
+                           'emg': np.random.RandomState(0).randn(5000),
+                           'markers': np.arange(12)})
+    got = ingest.load(buf.getvalue(), 'rec.mat')
+    assert got.fs == 2000.0
+    assert got.n_samples == 5000
+    assert any('markers' in note for note in got.notes)
+
+
+def test_column_names_that_collide_after_stripping():
+    """'A', ' A' and 'A.2' must not all end up called 'A.2'."""
+    n = 500
+    frame = pd.DataFrame({'A': np.zeros(n), ' A': np.zeros(n), 'A.2': np.zeros(n)})
+    got = ingest.load(csv_bytes(frame), 'rec.csv')
+    names = [c['name'] for c in got.channels]
+    assert len(names) == len(set(names)), names

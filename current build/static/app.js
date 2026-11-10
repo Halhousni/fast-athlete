@@ -87,9 +87,14 @@ async function api(path, options = {}) {
     const error = new Error(message);
     error.status = response.status;
     if (response.status === 401 && state.profile) {
-      // The token expired or was revoked: stop showing a signed-in screen.
-      resetUserState();
+      // The token expired. Drop what belongs to the profile, but keep the
+      // upload and the result on screen: they are not the profile's, and
+      // throwing them away would make the athlete start over.
+      state.profile = null;
+      state.history = [];
+      clear($('#home-last'));
       if (state.screen === 'profile') renderProfile();
+      if (state.screen === 'train') renderTrain();
     }
     throw error;
   }
@@ -783,6 +788,7 @@ function openHistoryItem(item) {
 
 // ── profile ─────────────────────────────────────────────────────────────────
 async function renderProfile() {
+  const seq = (renderProfile.seq = (renderProfile.seq || 0) + 1);
   const box = clear($('#profile-body'));
   if (state.profile) {
     box.append(el('div', { class: 'card' },
@@ -800,8 +806,10 @@ async function renderProfile() {
   let profiles = [];
   try {
     const data = await api('/profiles');
+    if (seq !== renderProfile.seq) return;   // a newer render is in flight
     profiles = data.profiles || [];
   } catch (error) {
+    if (seq !== renderProfile.seq) return;
     box.append(el('div', { class: 'card empty', text: error.message }));
   }
   if (profiles.length) {
@@ -917,6 +925,7 @@ function resetUserState() {
   state.file = null;
   state.selected = new Set();
   state.saved = false;
+  renderTrain.seq = (renderTrain.seq || 0) + 1;   // cancel a render in flight
   clear($('#home-last'));
   clear($('#train-body'));
   setStage('idle');
@@ -944,10 +953,12 @@ async function deleteMine() {
 
 // ── home ────────────────────────────────────────────────────────────────────
 async function renderHomeLast() {
+  const seq = (renderHomeLast.seq = (renderHomeLast.seq || 0) + 1);
   const box = clear($('#home-last'));
   if (!state.profile) return;
   try {
     const data = await api('/history');
+    if (seq !== renderHomeLast.seq) return;   // a newer render is in flight
     const last = (data.history || [])[0];
     if (!last) return;
     box.append(el('div', { class: 'card mt-24' },

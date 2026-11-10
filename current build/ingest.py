@@ -14,6 +14,7 @@ are explicit:
 """
 from __future__ import annotations
 
+import csv
 import io
 import re
 from dataclasses import dataclass, field
@@ -24,11 +25,6 @@ import scipy.io
 
 MAX_GAP_FRACTION = 0.01     # interpolate up to 1 % of samples
 MAX_GAP_SECONDS = 0.05      # ... and never bridge a gap longer than 50 ms
-
-# Above this size the slow python parser is not tried at all: it is the only
-# part of reading a file whose cost grows with the whole file, and one
-# unauthenticated upload must not be able to stall the container.
-MAX_FALLBACK_BYTES = 2_000_000
 
 MUSCLES = [
     dict(id='VL', name='Vastus Lateralis', desc='Outer quad'),
@@ -71,9 +67,10 @@ MUSCLE_ALIASES = [
 
 # A header cell that is only a unit ('mV', '(mV)', 's', 'X[s]') means the real
 # header is one row above: many exports put units under the channel names.
+# No digit suffix: 'S1', 'A1' and 'N1' are channel names, not unit cells.
 UNIT_ONLY = re.compile(
     r'^[\s(\[]*(?:µ?V|uV|mV|kV|A|mA|N|Nm|N·m|deg|°|rad|s|ms|samples?|%|force|'
-    r'm?\/?s\^?2?|g|Hz)[\s)\]]*(?:[._]?\d+)?$', re.I)
+    r'm\/s\^?2|m\/s|g|Hz)[\s)\]]*$', re.I)
 
 # Columns that are not EMG. Time-like columns are detected separately, then
 # excluded from analysis but kept for rate estimation.
@@ -146,6 +143,10 @@ def _fs_from_text(text: str) -> float | None:
     return None
 
 
+HEAD_CHARS = 64_000
+WHITESPACE = r'\s+'
+
+
 def _candidate_seps(head: str) -> list[str]:
     counts = {sep: head.count(sep) for sep in (',', '\t', ';')}
     order = [sep for sep in sorted(counts, key=lambda s: -counts[s]) if counts[sep]]
@@ -153,52 +154,93 @@ def _candidate_seps(head: str) -> list[str]:
         return order
     # No comma, tab or semicolon: space separated (MATLAB save -ascii) or a
     # single column of numbers.
-    return [r'\s+']
+    return [WHITESPACE] if ' ' in head else [',']
+
+
+def _skip_specs() -> list:
+    """Rows to skip. Integers skip metadata lines above the header; lists skip
+    rows under the header, which is how a units row is read past."""
+    return [*range(0, 7), [1], [1, 2]]
+
+
+def _parse(text: str, sep: str, skip) -> pd.DataFrame:
+    if sep == WHITESPACE:
+        # The C engine cannot take a regex separator. Collapsing runs of spaces
+        # to a tab lets it, and costs one pass instead of a python parse.
+        text = re.sub(r'[ \t]+', '\t', text)
+        sep = '\t'
+    return pd.read_csv(io.StringIO(text), sep=sep, skiprows=skip,
+                       on_bad_lines='skip',
+                       decimal=',' if sep == ';' else '.')
+
+
+def _looks_like_metadata(col) -> bool:
+    name = str(col)
+    return ':' in name or '=' in name or bool(FS_IN_TEXT.search(name))
 
 
 def _read_table(text: str) -> pd.DataFrame:
     """Pick the parse that yields the most numeric columns.
 
-    Every separator is scored rather than the first one that parses, because a
-    comma-decimal semicolon file also parses as one bad comma-separated column.
-    Each separator is tried with the header in place and with up to two rows
-    skipped under it, which is how a units row is read past.
+    Every separator and every skip count are scored, because a comma-decimal
+    semicolon file also parses as one bad comma-separated column, and a header
+    under three metadata lines parses happily with the metadata as the header.
+    The scoring runs on the first 64 kB only; the whole text is parsed once, with
+    the winner, so a large file costs one parse no matter how many are tried.
     """
-    head = text[:4096]
-    order = _candidate_seps(head)
-
+    head = text[:HEAD_CHARS]
     best, best_score = None, (0, 0)
-    for sep in order:
-        whitespace = sep == r'\s+'
-        for skip in (0, [1], [1, 2]):
+
+    for sep in _candidate_seps(head):
+        for skip in _skip_specs():
             try:
-                df = pd.read_csv(
-                    io.StringIO(text), sep=sep, skiprows=skip,
-                    on_bad_lines='skip', engine='python' if whitespace else 'c',
-                    decimal=',' if sep == ';' else '.')
+                df = _parse(head, sep, skip)
             except Exception:
                 continue
             numeric = df.select_dtypes(include=[np.number])
-            score = (len(numeric.columns), len(numeric))
+            if len(numeric.columns) < 1 or len(numeric) < 2:
+                continue
+            # A header taken from a metadata line ('Sampling rate: 2000') is
+            # penalised so the real header row one line down wins the tie, and
+            # so is a header made only of unit cells ('mV,mV,mV'), which is a
+            # units row that skipping by integer count would make the header.
+            names = [str(c) for c in df.columns]
+            penalty = -1 if any(_looks_like_metadata(c) for c in names) else 0
+            # 'mV,mV,mV' becomes mV, mV.1, mV.2 as a header, so the check is on
+            # the name without pandas' suffix.
+            if names and all(UNIT_ONLY.match(_col_base(n)) for n in names):
+                penalty -= 2
+            score = (len(numeric.columns) + penalty, len(numeric))
             if score > best_score:
-                best, best_score = df, score
+                best, best_score = (sep, skip), score
 
-    if best is not None and best_score[0] >= 1 and best_score[1] > 1:
-        return best
+    if best:
+        try:
+            full = _parse(text, best[0], best[1])
+        except Exception:
+            full = None
+        if full is not None:
+            numeric = full.select_dtypes(include=[np.number])
+            if len(numeric.columns) >= 1 and len(numeric) > 1:
+                return full
 
-    if len(text) <= MAX_FALLBACK_BYTES:
-        # Ragged metadata or a quoted free-text column: let the sniffer decide,
-        # then coerce. Bounded to a small file, because this parse is slow.
-        for skip in range(0, 7):
+    # Fall back: a quoted free-text column, or a shape no single separator
+    # explains. The sniffer is run on the head and the whole text is parsed once.
+    try:
+        dialect = csv.Sniffer().sniff(head, delimiters=',\t; ')
+        sep = dialect.delimiter
+    except csv.Error:
+        sep = None
+    if sep:
+        for skip in _skip_specs():
             try:
-                df = pd.read_csv(io.StringIO(text), sep=None, engine='python',
-                                 skiprows=skip, on_bad_lines='skip')
+                df = _parse(text, sep, skip)
             except Exception:
                 continue
             df = df.apply(pd.to_numeric, errors='coerce')
-            numeric = df.dropna(axis=1, how='all')
-            if len(numeric.columns) and len(numeric) > 1:
-                return numeric
+            kept = df.dropna(axis=1, how='all')
+            if len(kept.columns) and len(kept) > 1:
+                return kept
     raise IngestError('No numeric columns found in this file')
 
 
@@ -246,8 +288,10 @@ def _from_mat(content: bytes) -> tuple[pd.DataFrame, float | None, list[str]]:
 
     # Keep the series that share the modal length. A short side array (gains,
     # event markers) used to truncate every channel to its own length.
-    lengths = pd.Series([len(v) for v in series.values()])
-    length = int(lengths.mode().iloc[0])
+    counts = pd.Series([len(v) for v in series.values()]).value_counts()
+    # On a tie the longer series wins: one channel plus a short side array used
+    # to keep the side array and throw the channel away.
+    length = int(max(counts.index, key=lambda n: (counts[n], n)))
     kept, dropped = {}, []
     for key, value in series.items():
         if len(value) == length:
@@ -305,7 +349,10 @@ def _fs_from_time_column(df: pd.DataFrame) -> tuple[float | None, object | None]
         median_step = float(np.median(positive))
         if median_step <= 0:
             continue
-        uniform = np.allclose(positive, median_step, rtol=0.02)
+        # Rounding a time column to four decimals makes every step either
+        # 0.0005 or 0.0004, so a tight tolerance calls a uniform ramp uneven and
+        # the rate falls back to the median step (2048 Hz read as 2000).
+        uniform = bool(np.mean(np.abs(positive / median_step - 1) < 0.25) >= 0.99)
         base = _col_base(col)
         if not (TIME_NAMES.match(base) or (uniform and median_step < 1.0)):
             continue
@@ -317,14 +364,19 @@ def _fs_from_time_column(df: pd.DataFrame) -> tuple[float | None, object | None]
 
 
 def _dedup_columns(cols) -> list[str]:
-    seen, out = {}, []
+    """Make every column name unique, including against names already present.
+
+    'A', ' A' and 'A.2' used to end up as 'A', 'A.2', 'A.2': df[col] then
+    returned a DataFrame and the parse failed with a 500.
+    """
+    used, out = set(), []
     for col in cols:
-        name = str(col).replace('"', '').strip() or 'channel'
-        if name in seen:
-            seen[name] += 1
-            name = f'{name}.{seen[name]}'
-        else:
-            seen[name] = 1
+        base = str(col).replace('"', '').strip() or 'channel'
+        name, n = base, 1
+        while name in used:
+            n += 1
+            name = f'{base}.{n}'
+        used.add(name)
         out.append(name)
     return out
 
