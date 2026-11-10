@@ -27,22 +27,44 @@
   <!-- ══ CHECK ══════════════════════════════════════════════════════════ -->
   <!-- ══ HOME ════════════════════════════════════════════════════════════ -->
   <section id="screen-home" class="hidden" aria-labelledby="home-title">
-    <h1 id="home-title" class="home-title">Watch a muscle tire.</h1>
+    <div class="home">
+      <div class="home-copy">
+        <p class="ask"><i></i><span id="home-ask">No check yet today</span></p>
+        <h1 id="home-title">Check your calf.</h1>
 
-    <div class="strip">
-      <canvas id="home-strip"
-              aria-label="Time-frequency plane of a real surface EMG recording: brightness is power, the white line is the median frequency falling over 30 seconds"></canvas>
+        <p class="verdict" id="home-verdict" hidden>
+          <i></i><span id="home-verdict-text"></span>
+        </p>
+
+        <p class="lead" id="home-lead">Thirty seconds of signal from one muscle tells
+          you whether it has recovered enough to load today.</p>
+
+        <div class="cta home-cta">
+          <button class="btn btn--primary" id="home-start" type="button">Check my calf · 30 sec</button>
+          <span class="hint">Saved to your history</span>
+        </div>
+
+        <div class="more" id="home-more" hidden>
+          <button class="more-btn" id="why" type="button">Why <span id="why-word">red</span>?</button>
+          <div class="answer" id="why-body">
+            <p id="why-plain"></p>
+            <p class="safety">Sharp pain is not fatigue. If it hurts, stop and get it
+              looked at, whatever colour this shows.</p>
+            <button class="det" id="det" type="button">The numbers behind it</button>
+            <dl class="det-list" id="det-body"></dl>
+          </div>
+        </div>
+      </div>
+
+      <div class="disc">
+        <canvas id="home-disc" width="1200" height="1200" role="img"
+                aria-label="How recovered this muscle is, on a ready to rest dial"></canvas>
+        <div class="disc-label" id="home-disc-label"></div>
+      </div>
     </div>
 
-    <div class="strip-caption">
-      <span id="strip-caption">Example recording</span>
-      <span class="ramp" aria-hidden="true"><i></i><b>power</b></span>
-    </div>
-
-    <div class="cta-row">
-      <button class="btn btn--primary" id="home-start" type="button">Check your fatigue</button>
-    </div>
-    <p class="home-sentence">Record 30 seconds of muscle signal. Get a fatigue reading.</p>
+    <div class="home-foot" id="home-foot"></div>
+    <div class="mobile-cta"><button id="home-start-m" type="button">Check my calf · 30 sec</button></div>
   </section>
 
   <section id="screen-check" class="hidden" aria-labelledby="check-title">

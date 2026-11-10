@@ -99,6 +99,7 @@ Spacing: 4 / 8 / 12 / 16 / 24 / 32 / 48 only.
 }
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+[hidden] { display: none !important; }
 
 html, body { height: 100%; }
 
@@ -563,33 +564,109 @@ canvas.plane { width: 100%; height: auto; display: block; }
 .provenance b { color: var(--text-2); font-weight: 500; }
 
 
-/* ── the strip ─────────────────────────────────────────────────────────── */
-.home-title {
-  font-size: clamp(34px, 5.4vw, 60px);
-  line-height: 1.0; letter-spacing: -.04em; font-weight: 600;
-  margin: 22px 0 18px;
+/* ── home: the dial ────────────────────────────────────────────────────── */
+.home {
+  display: grid; grid-template-columns: 1.02fr .98fr; gap: 16px;
+  align-items: center; min-height: 68vh; padding-top: 12px;
 }
-.strip {
-  position: relative;
-  border-radius: 16px;
-  overflow: hidden;
-  border: 1px solid var(--line);
-  background: #161618;
-  box-shadow: var(--shadow);
+.ask {
+  display: flex; align-items: center; gap: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px; letter-spacing: .15em; text-transform: uppercase;
+  color: var(--text-3); margin-bottom: 18px;
 }
-.strip canvas { display: block; width: 100%; }
-.strip-caption {
-  display: flex; align-items: center; justify-content: space-between;
-  gap: 16px; margin-top: 10px;
-  font-size: 12px; color: var(--text-3);
+.ask i { display: block; width: 26px; height: 1px; background: currentColor; }
+.home h1 {
+  font-size: clamp(40px, 5.6vw, 78px); line-height: .96;
+  letter-spacing: -.03em; font-weight: 300;
 }
-.strip-caption .ramp { display: inline-flex; align-items: center; gap: 8px; }
-.strip-caption .ramp i {
-  display: inline-block; width: 64px; height: 6px; border-radius: 3px;
-  background: linear-gradient(90deg, #161618, #0E2A30 20%, #0B5C68 45%, #12A9B8 70%, #16E0F0 88%, #D9FCFF);
+.home h1 b { font-weight: 500; }
+.verdict {
+  display: flex; align-items: center; gap: 12px; margin-top: 24px;
+  font-size: 24px; font-weight: 500; letter-spacing: -.01em;
 }
-.strip-caption .ramp b { font-weight: 500; letter-spacing: .02em; }
-.home-sentence {
-  margin-top: 10px; font-size: 15px; color: var(--text-2);
+.verdict i { width: 12px; height: 12px; border-radius: 50%; background: var(--grey); }
+.home .lead {
+  margin-top: 14px; max-width: 40ch; font-size: 15.5px; line-height: 1.62;
+  color: var(--text-2);
 }
-.cta-row { margin-top: 22px; }
+.home-cta { margin-top: 26px; display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
+.home-cta .hint {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px; letter-spacing: .1em; color: var(--text-3);
+}
+
+/* the way from "red" to "why" */
+.more { margin-top: 22px; }
+.more-btn {
+  display: flex; align-items: center; gap: 9px; background: none; border: 0;
+  padding: 12px 0; cursor: pointer; color: var(--text);
+  font-size: 16px; font-weight: 500; letter-spacing: -.01em;
+}
+.more-btn::after { content: "+"; color: var(--text-3); font-weight: 400; }
+.more-btn.open::after { content: "–"; }
+.answer { display: none; margin-top: 2px; max-width: 42ch; }
+.answer.open { display: block; }
+.answer p { font-size: 14.5px; line-height: 1.62; color: var(--text-2); }
+.answer .safety {
+  margin-top: 12px; color: var(--text-2); font-size: 13.5px;
+  border-left: 2px solid var(--warn); padding-left: 12px;
+}
+.answer .det {
+  margin-top: 14px; background: none; border: 0; cursor: pointer;
+  color: var(--text-3); font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase;
+  border-bottom: 1px solid var(--line-strong); padding: 0 0 3px;
+}
+.det-list { display: none; grid-template-columns: auto 1fr; gap: 5px 20px; margin-top: 12px; }
+.det-list.open { display: grid; }
+.det-list dt {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 9.5px; letter-spacing: .12em; text-transform: uppercase;
+  color: var(--text-3); padding-top: 3px;
+}
+.det-list dd {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px; color: var(--text);
+}
+
+.disc { display: grid; justify-items: center; }
+.disc canvas { width: 100%; max-width: 560px; height: auto; display: block; }
+.disc-label {
+  margin-top: 16px; text-align: center;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px; letter-spacing: .15em; text-transform: uppercase; color: var(--text-3);
+}
+
+.home-foot {
+  display: flex; align-items: center; gap: 20px; flex-wrap: wrap;
+  margin-top: 10px; padding: 16px 0 0; border-top: 1px solid var(--line);
+}
+.foot-txt {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--text-3);
+}
+.foot-dots { display: flex; gap: 7px; }
+.foot-dots i { width: 9px; height: 9px; border-radius: 50%; display: block; }
+
+.mobile-cta { display: none; }
+
+@media (max-width: 940px) {
+  .home { grid-template-columns: 1fr; gap: 8px; min-height: 0; }
+  .disc { order: -1; }
+  .disc canvas { max-width: 300px; }
+  .home h1 { font-size: 34px; }
+  .verdict { font-size: 19px; margin-top: 18px; }
+  .home-cta { display: none; }
+  .det-list { margin-bottom: 84px; }
+  .mobile-cta {
+    display: block; position: fixed; left: 0; right: 0; bottom: 0; z-index: 60;
+    padding: 12px 16px calc(16px + env(safe-area-inset-bottom));
+    background: linear-gradient(transparent, var(--bg) 40%);
+  }
+  .mobile-cta button {
+    width: 100%; height: 56px; border: 0; border-radius: 12px;
+    background: var(--accent); color: var(--accent-ink);
+    font-size: 15px; font-weight: 600; letter-spacing: .02em; cursor: pointer;
+  }
+}
