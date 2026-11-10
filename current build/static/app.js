@@ -86,6 +86,11 @@ async function api(path, options = {}) {
     const message = (data && data.error) || `Request failed (${response.status})`;
     const error = new Error(message);
     error.status = response.status;
+    if (response.status === 401 && state.profile) {
+      // The token expired or was revoked: stop showing a signed-in screen.
+      resetUserState();
+      if (state.screen === 'profile') renderProfile();
+    }
     throw error;
   }
   return data;
@@ -267,7 +272,7 @@ async function analyse() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ session: up.session, muscles }),
     });
-    state.analysis = data;
+    state.analysis = { ...data, at: Date.now() };
     state.saved = false;
     setStage('results');
     renderResults();
@@ -366,7 +371,7 @@ function renderResults() {
     el('span', { text: 'Research estimate, not a diagnosis. The thresholds are provisional and still under validation.' }));
   box.append(notice);
 
-  const actions = el('div', { class: 'btn-row', class: 'mt-16' });
+  const actions = el('div', { class: 'btn-row mt-16' });
   actions.append(el('button', { class: 'btn btn--quiet', type: 'button', onclick: startOver }, 'New check'));
   if (state.profile) {
     actions.append(el('button', { class: 'btn btn--quiet', type: 'button', onclick: () => nav('history') }, 'History'));
@@ -374,7 +379,7 @@ function renderResults() {
   box.append(actions);
 
   if (!state.profile) {
-    box.append(el('div', { class: 'notice', class: 'mt-16' }, ICON.info(),
+    box.append(el('div', { class: 'notice mt-16' }, ICON.info(),
       el('span', null,
         'This result is not saved. ',
         el('button', { class: 'btn--text', type: 'button', onclick: () => nav('profile') }, 'Add a profile'),
@@ -545,35 +550,51 @@ const CALL = {
   grey: { title: 'Nothing to go on', body: 'The last check could not measure anything. Check the recording and the sampling rate.' },
 };
 
+const CALL_FRESH_H = 36;     // older than this and today's call is not today's
+
 async function renderTrain() {
+  const seq = (renderTrain.seq = (renderTrain.seq || 0) + 1);
   const box = clear($('#train-body'));
-  let latest = null;
   let history = [];
+  let saved = null;
 
   if (state.profile) {
     try {
       const data = await api('/history');
       history = data.history || [];
-      latest = history[0] || null;
+      saved = history[0] || null;
     } catch (error) { /* not signed in, or the server is down: fall through */ }
   }
 
-  if (!latest && state.analysis) {
-    const results = Object.values(state.analysis.results);
-    latest = {
+  let latest = saved;
+  if (state.analysis) {
+    const run = {
       status: state.analysis.overall.status,
       avg_score: state.analysis.overall.mean_score,
-      ts: new Date().toISOString(),
-      results: results.map((r) => ({
+      ts: new Date(state.analysis.at || Date.now()).toISOString(),
+      results: Object.values(state.analysis.results).map((r) => ({
         id: r.id, column: r.column, status: r.status, score: r.score, tip: r.tip,
       })),
       unsaved: true,
     };
+    // Whichever is newer wins: a check just done outranks one saved days ago.
+    if (!saved || new Date(run.ts) > new Date(saved.ts)) latest = run;
+  }
+
+  if (seq !== renderTrain.seq) return;   // a newer render is in flight
+
+  const age = latest ? (Date.now() - new Date(latest.ts).getTime()) / 36e5 : null;
+  if (latest && age > CALL_FRESH_H) {
+    latest = null;
+    history = history.slice(0, 7);
   }
 
   if (!latest) {
+    const stale = history.length
+      ? `The last check was ${formatDate(history[0].ts)}. Check again and the call for today appears here.`
+      : 'Nothing to go on yet. Check your muscles first and the call for today appears here.';
     box.append(el('div', { class: 'card empty' }, ICON.empty(),
-      el('div', { text: 'Nothing to go on yet. Check your muscles first and the call for today appears here.' }),
+      el('div', { text: stale }),
       el('button', { class: 'btn btn--primary mt-16', type: 'button', onclick: () => nav('check') }, 'Check your muscles')));
     return;
   }
@@ -871,6 +892,9 @@ async function createProfile() {
   const name = $('#new-name').value.trim();
   const pin = $('#new-pin').value.trim();
   if (!name) return toast('Enter a name first');
+  const button = document.querySelector('#profile-body .btn--primary');
+  if (button && button.disabled) return;
+  if (button) button.disabled = true;
   try {
     const created = await api('/profiles', {
       method: 'POST',
@@ -880,13 +904,27 @@ async function createProfile() {
     await signIn(created.id, pin);
   } catch (error) {
     toast(error.message);
+  } finally {
+    if (button) button.disabled = false;
   }
+}
+
+function resetUserState() {
+  state.profile = null;
+  state.history = [];
+  state.analysis = null;
+  state.upload = null;
+  state.file = null;
+  state.selected = new Set();
+  state.saved = false;
+  clear($('#home-last'));
+  clear($('#train-body'));
+  setStage('idle');
 }
 
 async function signOut() {
   try { await api('/profiles/logout', { method: 'POST' }); } catch (e) { /* ignore */ }
-  state.profile = null;
-  state.history = [];
+  resetUserState();
   toast('Signed out');
   renderProfile();
 }
@@ -896,7 +934,7 @@ async function deleteMine() {
   if (!window.confirm(`Delete ${state.profile.name} and every saved result?`)) return;
   try {
     await api(`/profiles/${state.profile.id}`, { method: 'DELETE' });
-    state.profile = null;
+    resetUserState();
     toast('Profile deleted');
     renderProfile();
   } catch (error) {
@@ -925,10 +963,10 @@ async function renderHomeLast() {
 // ── formatting ──────────────────────────────────────────────────────────────
 function formatDuration(seconds) {
   if (seconds === null || seconds === undefined) return '—';
-  if (seconds < 60) return `${Math.round(seconds)} s`;
-  const m = Math.floor(seconds / 60);
-  const s = Math.round(seconds - m * 60);
-  return `${m} min ${s} s`;
+  const total = Math.round(seconds);
+  if (total < 60) return `${total} s`;
+  const m = Math.floor(total / 60);
+  return `${m} min ${total - m * 60} s`;
 }
 
 async function loadVersion() {
@@ -1017,4 +1055,9 @@ function wire() {
 }
 
 wire();
-renderHomeLast();
+// The cookie outlives a reload, so the server is asked who it belongs to;
+// otherwise a shared device looks signed out while the session is still live.
+api('/profiles/me')
+  .then((me) => { state.profile = { id: me.id, name: me.name }; })
+  .catch(() => { /* not signed in */ })
+  .finally(() => { renderHomeLast(); if (state.screen === 'profile') renderProfile(); });

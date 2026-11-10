@@ -18,6 +18,7 @@ import hmac
 import os
 import secrets
 import sqlite3
+import threading
 import time
 import uuid
 
@@ -38,26 +39,36 @@ class StoreError(Exception):
 # ── upload sessions ──────────────────────────────────────────────────────────
 
 class SessionStore:
+    """Uploads held in memory.
+
+    Upload and analysis run in the threadpool, so more than one thread touches
+    this at a time: every method takes the lock, and `_evict` is only ever
+    called with it held.
+    """
+
     def __init__(self, ttl: int = SESSION_TTL_S, limit: int = MAX_SESSIONS):
         self._items: dict[str, dict] = {}
+        self._lock = threading.Lock()
         self.ttl, self.limit = ttl, limit
 
     def put(self, channels: dict[str, np.ndarray], fs: float, filename: str,
             notes: list[str]) -> str:
         sid = uuid.uuid4().hex
-        self._items[sid] = dict(channels=channels, fs=float(fs), filename=filename,
-                                notes=notes, created=time.time())
-        self._evict()
+        with self._lock:
+            self._items[sid] = dict(channels=channels, fs=float(fs), filename=filename,
+                                    notes=notes, created=time.time())
+            self._evict()
         return sid
 
     def get(self, sid: str) -> dict | None:
-        item = self._items.get(sid)
-        if not item:
-            return None
-        if time.time() - item['created'] > self.ttl:
-            self._items.pop(sid, None)
-            return None
-        return item
+        with self._lock:
+            item = self._items.get(sid)
+            if not item:
+                return None
+            if time.time() - item['created'] > self.ttl:
+                self._items.pop(sid, None)
+                return None
+            return item
 
     def _evict(self) -> None:
         now = time.time()
@@ -68,8 +79,9 @@ class SessionStore:
             self._items.pop(oldest, None)
 
     def bytes_held(self) -> int:
-        return sum(v['channels'][c].nbytes for v in self._items.values()
-                   for c in v['channels'])
+        with self._lock:
+            return sum(v['channels'][c].nbytes for v in self._items.values()
+                       for c in v['channels'])
 
 
 # ── PIN handling ─────────────────────────────────────────────────────────────
@@ -100,19 +112,26 @@ class _Attempts:
 
     def __init__(self, limit: int = PIN_ATTEMPTS, window: int = PIN_WINDOW_S):
         self.limit, self.window = limit, window
-        self._hits: dict[int, list[float]] = {}
+        self._hits: dict[str, list[float]] = {}
+        self._lock = threading.Lock()
 
-    def blocked(self, profile_id: int) -> bool:
+    def blocked(self, key: str) -> bool:
         now = time.time()
-        hits = [t for t in self._hits.get(profile_id, []) if now - t < self.window]
-        self._hits[profile_id] = hits
-        return len(hits) >= self.limit
+        with self._lock:
+            hits = [t for t in self._hits.get(key, []) if now - t < self.window]
+            if hits:
+                self._hits[key] = hits
+            else:
+                self._hits.pop(key, None)
+            return len(hits) >= self.limit
 
-    def record(self, profile_id: int) -> None:
-        self._hits.setdefault(profile_id, []).append(time.time())
+    def record(self, key: str) -> None:
+        with self._lock:
+            self._hits.setdefault(key, []).append(time.time())
 
-    def clear(self, profile_id: int) -> None:
-        self._hits.pop(profile_id, None)
+    def clear(self, key: str) -> None:
+        with self._lock:
+            self._hits.pop(key, None)
 
 
 # ── database ─────────────────────────────────────────────────────────────────
@@ -180,6 +199,11 @@ class Store:
         except sqlite3.IntegrityError as exc:
             raise StoreError('That name is already taken') from exc
 
+    def profile_by_name(self, name: str) -> sqlite3.Row | None:
+        with self._db() as conn:
+            return conn.execute('SELECT * FROM profiles WHERE name=?',
+                                (name,)).fetchone()
+
     def profile(self, profile_id: int) -> sqlite3.Row | None:
         with self._db() as conn:
             return conn.execute('SELECT * FROM profiles WHERE id=?',
@@ -194,10 +218,12 @@ class Store:
     # tokens
     def issue_token(self, profile_id: int) -> str:
         token = secrets.token_urlsafe(32)
+        now = time.time()
         with self._db() as conn:
+            conn.execute('DELETE FROM tokens WHERE expires_at < ?', (now,))
             conn.execute('INSERT INTO tokens(token_hash, profile_id, expires_at) '
                          'VALUES(?,?,?)',
-                         (_token_hash(token), profile_id, time.time() + TOKEN_TTL_S))
+                         (_token_hash(token), profile_id, now + TOKEN_TTL_S))
         return token
 
     def token_profile(self, token: str | None) -> int | None:

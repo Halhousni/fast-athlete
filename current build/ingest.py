@@ -25,6 +25,11 @@ import scipy.io
 MAX_GAP_FRACTION = 0.01     # interpolate up to 1 % of samples
 MAX_GAP_SECONDS = 0.05      # ... and never bridge a gap longer than 50 ms
 
+# Above this size the slow python parser is not tried at all: it is the only
+# part of reading a file whose cost grows with the whole file, and one
+# unauthenticated upload must not be able to stall the container.
+MAX_FALLBACK_BYTES = 2_000_000
+
 MUSCLES = [
     dict(id='VL', name='Vastus Lateralis', desc='Outer quad'),
     dict(id='VM', name='Vastus Medialis', desc='Inner quad'),
@@ -64,6 +69,12 @@ MUSCLE_ALIASES = [
     ('FDS', ['FLEXOR DIGITORUM SUPERFICIALIS', 'FDS']),
 ]
 
+# A header cell that is only a unit ('mV', '(mV)', 's', 'X[s]') means the real
+# header is one row above: many exports put units under the channel names.
+UNIT_ONLY = re.compile(
+    r'^[\s(\[]*(?:µ?V|uV|mV|kV|A|mA|N|Nm|N·m|deg|°|rad|s|ms|samples?|%|force|'
+    r'm?\/?s\^?2?|g|Hz)[\s)\]]*(?:[._]?\d+)?$', re.I)
+
 # Columns that are not EMG. Time-like columns are detected separately, then
 # excluded from analysis but kept for rate estimation.
 NON_EMG = re.compile(
@@ -72,8 +83,8 @@ NON_EMG = re.compile(
     r'heart|\becg\b|resp|^(?:µV|uV|mV|V)(?:[._ ]?\d+)?$',
     re.I)
 
-TIME_NAMES = re.compile(r'^(time|t|sec|secs|seconds|timestamp|x|x\[s\]|'
-                        r'time\s*\(s\)|time_?s?|elapsed)$', re.I)
+TIME_NAMES = re.compile(r'^(?:time|t|sec|secs|seconds|timestamp|x|x\[s\]|'
+                        r'time\s*\(s\)|time_?s?|elapsed|zeit|temps|tiempo)$', re.I)
 
 FS_KEYS = re.compile(r'^(fs|f_s|fs_hz|srate|sr|sampling_?rate|sample_?rate|rate)$', re.I)
 FS_IN_TEXT = re.compile(
@@ -89,9 +100,9 @@ class IngestError(ValueError):
 
 @dataclass
 class Ingest:
-    channels: list[dict] = field(default_factory=list)   # {name, data, dropped}
+    channels: list[dict] = field(default_factory=list)   # {name, data, drop_reason}
     fs: float | None = None
-    fs_source: str = 'none'      # 'file' | 'time-column' | 'none'
+    fs_source: str = 'none'      # 'given' | 'file' | 'time-column' | 'none'
     n_samples: int = 0
     notes: list[str] = field(default_factory=list)
 
@@ -102,8 +113,18 @@ def _norm_col(s) -> str:
                   .replace('(', ' ').replace(')', ' ').replace(',', ' ')).strip()
 
 
+def _col_base(name) -> str:
+    """The name without pandas' duplicate suffix, so 'X[s].1' still reads as time."""
+    return re.sub(r'\.\d+$', '', str(name).strip())
+
+
 def _decode(content: bytes) -> str:
-    for enc in ('utf-8-sig', 'utf-16', 'utf-8', 'latin-1'):
+    if content[:2] in (b'\xff\xfe', b'\xfe\xff'):
+        try:
+            return content.decode('utf-16')
+        except UnicodeDecodeError:
+            pass
+    for enc in ('utf-8-sig', 'utf-8', 'latin-1'):
         try:
             return content.decode(enc)
         except UnicodeDecodeError:
@@ -125,30 +146,36 @@ def _fs_from_text(text: str) -> float | None:
     return None
 
 
-def _read_table(content: bytes) -> pd.DataFrame:
-    """Pick the parse that yields the most numeric columns, cheaply.
+def _candidate_seps(head: str) -> list[str]:
+    counts = {sep: head.count(sep) for sep in (',', '\t', ';')}
+    order = [sep for sep in sorted(counts, key=lambda s: -counts[s]) if counts[sep]]
+    if order:
+        return order
+    # No comma, tab or semicolon: space separated (MATLAB save -ascii) or a
+    # single column of numbers.
+    return [r'\s+']
+
+
+def _read_table(text: str) -> pd.DataFrame:
+    """Pick the parse that yields the most numeric columns.
 
     Every separator is scored rather than the first one that parses, because a
     comma-decimal semicolon file also parses as one bad comma-separated column.
-    The C engine is used with a few skip rows; the slower python engine is only
-    reached when nothing numeric comes back. A units row under the header is
-    handled by the caller, which retries with one more skipped row.
+    Each separator is tried with the header in place and with up to two rows
+    skipped under it, which is how a units row is read past.
     """
-    text = _decode(content)
     head = text[:4096]
-    counts = {sep: head.count(sep) for sep in (',', '\t', ';')}
-    if not any(counts.values()):
-        raise IngestError('No numeric columns found in this file. Save the '
-                          'recording as CSV, TXT or MAT.')
-    order = sorted(counts, key=lambda s: -counts[s])
+    order = _candidate_seps(head)
 
     best, best_score = None, (0, 0)
     for sep in order:
-        for skip in range(0, 4):
+        whitespace = sep == r'\s+'
+        for skip in (0, [1], [1, 2]):
             try:
-                df = pd.read_csv(io.BytesIO(content), sep=sep, skiprows=skip,
-                                 on_bad_lines='skip',
-                                 decimal=',' if sep != ',' else '.')
+                df = pd.read_csv(
+                    io.StringIO(text), sep=sep, skiprows=skip,
+                    on_bad_lines='skip', engine='python' if whitespace else 'c',
+                    decimal=',' if sep == ';' else '.')
             except Exception:
                 continue
             numeric = df.select_dtypes(include=[np.number])
@@ -159,17 +186,19 @@ def _read_table(content: bytes) -> pd.DataFrame:
     if best is not None and best_score[0] >= 1 and best_score[1] > 1:
         return best
 
-    # Fall back: a units row or ragged metadata makes every column an object.
-    for skip in range(0, 7):
-        try:
-            df = pd.read_csv(io.BytesIO(content), sep=None, engine='python',
-                             skiprows=skip, on_bad_lines='skip')
-        except Exception:
-            continue
-        df = df.apply(pd.to_numeric, errors='coerce')
-        numeric = df.dropna(axis=1, how='all')
-        if len(numeric.columns) and len(numeric) > 1:
-            return numeric
+    if len(text) <= MAX_FALLBACK_BYTES:
+        # Ragged metadata or a quoted free-text column: let the sniffer decide,
+        # then coerce. Bounded to a small file, because this parse is slow.
+        for skip in range(0, 7):
+            try:
+                df = pd.read_csv(io.StringIO(text), sep=None, engine='python',
+                                 skiprows=skip, on_bad_lines='skip')
+            except Exception:
+                continue
+            df = df.apply(pd.to_numeric, errors='coerce')
+            numeric = df.dropna(axis=1, how='all')
+            if len(numeric.columns) and len(numeric) > 1:
+                return numeric
     raise IngestError('No numeric columns found in this file')
 
 
@@ -197,9 +226,9 @@ def _from_mat(content: bytes) -> tuple[pd.DataFrame, float | None, list[str]]:
     for key, value in mat.items():
         if key.startswith('__') or not np.issubdtype(np.asarray(value).dtype, np.number):
             continue
-        arr = np.asarray(value)
-        if arr.size <= 1:
+        if np.asarray(value).size <= 1:
             continue                      # a scalar carries no signal
+        arr = np.asarray(value)
         if arr.ndim == 1:
             series[key] = arr
         elif arr.ndim == 2:
@@ -214,8 +243,22 @@ def _from_mat(content: bytes) -> tuple[pd.DataFrame, float | None, list[str]]:
 
     if not series:
         raise IngestError('No numeric channels found in the .mat file')
-    length = min(len(v) for v in series.values())
-    df = pd.DataFrame({k: v[:length] for k, v in series.items()})
+
+    # Keep the series that share the modal length. A short side array (gains,
+    # event markers) used to truncate every channel to its own length.
+    lengths = pd.Series([len(v) for v in series.values()])
+    length = int(lengths.mode().iloc[0])
+    kept, dropped = {}, []
+    for key, value in series.items():
+        if len(value) == length:
+            kept[key] = value
+        else:
+            dropped.append(f'{key} ({len(value)} samples)')
+    if dropped:
+        notes.append('Skipped a series of a different length: ' + ', '.join(dropped))
+    if not kept:
+        raise IngestError('The arrays in the .mat file are of different lengths')
+    df = pd.DataFrame({k: v for k, v in kept.items()})
     return df, fs, notes
 
 
@@ -243,82 +286,103 @@ def _clean_series(s: pd.Series, fs: float | None) -> tuple[np.ndarray, str | Non
     return filled, None
 
 
-def _fs_from_time_column(df: pd.DataFrame) -> tuple[float | None, str | None]:
-    """Find a time column and read the rate off it."""
+def _fs_from_time_column(df: pd.DataFrame) -> tuple[float | None, object | None]:
+    """Find a time column and read the rate off it.
+
+    The rate is taken from the first and last sample rather than the median of
+    the steps, because a time column written to four decimals rounds each step
+    and biases the median (2048 Hz read as 2000 Hz).
+    """
     for col in df.columns:
-        name = str(col).strip()
         numeric = pd.to_numeric(df[col], errors='coerce').to_numpy(dtype=float)
-        if np.isfinite(numeric).sum() < 3:
+        finite = numeric[np.isfinite(numeric)]
+        if len(finite) < 3:
             continue
-        diffs = np.diff(numeric[np.isfinite(numeric)])
-        if len(diffs) == 0:
-            continue
+        diffs = np.diff(finite)
         positive = diffs[diffs > 0]
         if len(positive) < 0.9 * len(diffs):
             continue
         median_step = float(np.median(positive))
-        uniform = np.allclose(positive, median_step, rtol=0.02)
-        if not (TIME_NAMES.match(name) or (uniform and median_step < 1.0)):
-            continue
         if median_step <= 0:
             continue
-        fs = 1.0 / median_step
+        uniform = np.allclose(positive, median_step, rtol=0.02)
+        base = _col_base(col)
+        if not (TIME_NAMES.match(base) or (uniform and median_step < 1.0)):
+            continue
+        span = float(finite[-1] - finite[0])
+        fs = (len(finite) - 1) / span if uniform and span > 0 else 1.0 / median_step
         if FS_MIN <= fs <= FS_MAX:
             return fs, col
     return None, None
 
 
-def load(content: bytes, filename: str) -> Ingest:
-    """Parse a recording. Raises IngestError with a message fit for the athlete."""
+def _dedup_columns(cols) -> list[str]:
+    seen, out = {}, []
+    for col in cols:
+        name = str(col).replace('"', '').strip() or 'channel'
+        if name in seen:
+            seen[name] += 1
+            name = f'{name}.{seen[name]}'
+        else:
+            seen[name] = 1
+        out.append(name)
+    return out
+
+
+def load(content: bytes, filename: str, fs: float | None = None) -> Ingest:
+    """Parse a recording. Raises IngestError with a message fit for the athlete.
+
+    `fs` is a rate the athlete supplied; it wins over anything in the file and is
+    used for gap interpolation, which a file without its own rate cannot do.
+    """
     name = (filename or '').lower()
     notes: list[str] = []
-    fs = None
     fs_source = 'none'
 
+    if fs is not None and not (FS_MIN <= fs <= FS_MAX):
+        fs = None
+    if fs is not None:
+        fs_source = 'given'
+
     if name.endswith('.mat'):
-        df, fs, mat_notes = _from_mat(content)
+        df, file_fs, mat_notes = _from_mat(content)
         notes += mat_notes
-        if fs is not None:
-            fs_source = 'file'
+        if fs is None and file_fs is not None:
+            fs, fs_source = file_fs, 'file'
     else:
         text = _decode(content)
-        fs = _fs_from_text(text)
-        if fs is not None:
-            fs_source = 'file'
-        df = _read_table(content)
+        if fs is None:
+            fs = _fs_from_text(text)
+            if fs is not None:
+                fs_source = 'file'
+        df = _read_table(text)
 
-    df.columns = [str(c).replace('"', '').strip() for c in df.columns]
+    df.columns = _dedup_columns(df.columns)
     df = df.dropna(axis=1, how='all')
     if df.empty or len(df) < 10:
         raise IngestError('The file holds fewer than ten rows of data')
-
-    # A units row under the header leaves columns called mV, mV.1, ... Read
-    # again with that row skipped.
-    if all(NON_EMG.search(str(c)) or TIME_NAMES.match(str(c).strip())
-           for c in df.columns) and not name.endswith('.mat'):
-        for extra in (1, 2):
-            try:
-                # skiprows=[1] drops the units row and keeps the header.
-                retry = pd.read_csv(io.BytesIO(content), skiprows=list(range(1, extra + 1)),
-                                    on_bad_lines='skip', sep=None, engine='python')
-            except Exception:
-                break
-            retry.columns = [str(c).replace('"', '').strip() for c in retry.columns]
-            if not all(NON_EMG.search(str(c)) or TIME_NAMES.match(str(c).strip())
-                       for c in retry.columns):
-                df = retry
-                break
 
     if fs is None:
         fs, time_col = _fs_from_time_column(df)
         if fs is not None:
             fs_source = 'time-column'
             notes.append(f'Read {fs:.0f} Hz from the "{time_col}" column')
+    else:
+        time_col = None
+        for col in df.columns:
+            if TIME_NAMES.match(_col_base(col)):
+                time_col = col
+                break
 
-    # Drop time and non-EMG columns now that the rate has been read.
+    # Drop time and non-EMG columns now that the rate has been read. The column
+    # the rate came from is dropped by identity, so a time column with an
+    # unexpected name cannot be offered as a muscle.
     keep = []
     for col in df.columns:
-        if TIME_NAMES.match(str(col).strip()) or NON_EMG.search(str(col)):
+        if col == time_col:
+            continue
+        base = _col_base(col)
+        if TIME_NAMES.match(base) or NON_EMG.search(base) or UNIT_ONLY.match(base):
             continue
         if pd.to_numeric(df[col], errors='coerce').notna().sum() < len(df) * 0.5:
             continue
@@ -340,7 +404,12 @@ def load(content: bytes, filename: str) -> Ingest:
 
 
 def match_muscles(names: list[str]) -> list[dict]:
-    """Known muscles in file order, then unmatched channels as plain channels."""
+    """Known muscles in file order, then unmatched channels as plain channels.
+
+    An unmatched channel takes its column name as its id, unless that would
+    collide with a matched muscle or another channel: ids are what the client
+    sends back, so two channels must never share one.
+    """
     known = {m['id'].upper(): m for m in MUSCLES}
     alias_order = sorted(((mid, a) for mid, aliases in MUSCLE_ALIASES for a in aliases),
                          key=lambda x: -len(x[1]))
@@ -367,9 +436,17 @@ def match_muscles(names: list[str]) -> list[dict]:
                                     desc=known[mid]['desc'], column=name,
                                     recognised=True))
                 break
+
+    taken = set(used) | set(known)
     for name in names:
         if any(m['column'] == name for m in matched):
             continue
-        matched.append(dict(id=name, name='Unrecognised channel', desc=name,
-                            column=name, recognised=False))
+        base = str(name)[:64] or 'channel'
+        candidate, n = base, 1
+        while candidate in taken:
+            n += 1
+            candidate = f'{base[:60]}_{n}'
+        taken.add(candidate)
+        matched.append(dict(id=candidate, name='Unrecognised channel',
+                            desc=str(name)[:120], column=name, recognised=False))
     return matched
