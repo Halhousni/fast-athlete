@@ -26,68 +26,26 @@
 
   <!-- ══ CHECK ══════════════════════════════════════════════════════════ -->
   <!-- ══ HOME ════════════════════════════════════════════════════════════ -->
-  <section id="screen-home" aria-labelledby="home-title">
-    <div class="hero">
-      <span class="eyebrow">Surface EMG &middot; research prototype</span>
-      <h1 id="home-title">How tired is each muscle, <em>before</em> it fails?</h1>
-      <p class="lede">FAST Athlete reads a surface EMG recording and reports fatigue for every
-        muscle in it. It compares the start of a contraction with its end. As a muscle tires,
-        the median frequency of its signal falls and the amplitude rises to compensate. Those
-        two changes, and where the muscle sits between them, are the whole measurement.</p>
+  <section id="screen-home" class="hidden" aria-labelledby="home-title">
+    <h1 id="home-title" class="home-title">Watch a muscle tire.</h1>
+
+    <div class="strip">
+      <canvas id="home-strip"
+              aria-label="Time-frequency plane of a real surface EMG recording: brightness is power, the white line is the median frequency falling over 30 seconds"></canvas>
     </div>
 
-    <div class="steps">
-      <div class="card step">
-        <span class="num">01</span>
-        <h3>Record</h3>
-        <p>Surface EMG from the muscles you want to check, during a held contraction at a
-          steady effort. Any amplifier that exports CSV, TXT or MAT.</p>
-      </div>
-      <div class="card step">
-        <span class="num">02</span>
-        <h3>Measure</h3>
-        <p>Each channel gets a synchrosqueezed transform. From it, the median frequency per
-          half second, then the change from the first five seconds to the last.</p>
-      </div>
-      <div class="card step">
-        <span class="num">03</span>
-        <h3>Read</h3>
-        <p>Frequency down and amplitude up together is the signature of fatigue. The size of
-          both decides low, medium or high, and the plane shows which muscles moved.</p>
-      </div>
-    </div>
-
-    <div class="card plane-card mt-24">
-      <div class="plane-head">
-        <h3>The fatigue plane</h3>
-        <div class="legend">
-          <span><i style="background:var(--ok)"></i>low</span>
-          <span><i style="background:var(--warn)"></i>medium</span>
-          <span><i style="background:var(--bad)"></i>high</span>
-        </div>
-      </div>
-      <div class="plane-wrap">
-        <canvas class="plane" id="home-plane" width="960" height="440"
-                aria-label="Fatigue plane: change in amplitude against change in median frequency"></canvas>
-      </div>
-      <p class="plane-note">Horizontal: change in amplitude. Vertical: change in median
-        frequency. A muscle that has fatigued moves right and down. The lines are the
-        thresholds the method sets at 10&nbsp;% amplitude and 5&nbsp;% frequency.</p>
+    <div class="strip-caption">
+      <span id="strip-caption">Example recording</span>
+      <span class="ramp" aria-hidden="true"><i></i><b>power</b></span>
     </div>
 
     <div class="cta-row">
-      <button class="btn btn--primary" id="home-start" type="button">Start a check</button>
-      <button class="btn btn--quiet" id="home-demo" type="button">Use the sample recording</button>
+      <button class="btn btn--primary" id="home-start" type="button">Check your fatigue</button>
     </div>
-
-    <div class="provenance">
-      <span><b>Method</b> Zhao, Charoonsrisawad, Ichiyama &amp; Chakrabarty, 2025</span>
-      <span><b>Transform</b> synchrosqueezed CWT, 32 voices per octave</span>
-      <span><b>Status</b> research prototype, thresholds provisional</span>
-    </div>
+    <p class="home-sentence">Record 30 seconds of muscle signal. Get a fatigue reading.</p>
   </section>
 
-  <section id="screen-check" aria-labelledby="check-title">
+  <section id="screen-check" class="hidden" aria-labelledby="check-title">
 
     <div id="stage-idle">
       <div class="verdict">

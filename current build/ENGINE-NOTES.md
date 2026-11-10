@@ -83,3 +83,45 @@ PY
 
 If the aggregate ever needs to come back, it is one function: restore the
 band-filter loop in `engine.transform`.
+
+## Filter and aggregate, restored
+
+The pipeline now runs the method as named: 34 overlapping bands between 1 and
+35 Hz (a band centred at c covers c−1 to c+2 Hz), each band gets its own
+synchrosqueezed transform, and the band powers are summed onto one 0.5 Hz grid.
+The single whole-band transform described above is still in the file as
+`transform_single`, selectable with `FAST_TRANSFORM=single`, and is what the
+equivalence table in `scripts/compare_transform.py` compares against.
+
+Two things make it affordable. Each band is decimated to eight times its own
+top edge before transforming — a 1–3 Hz band is transformed at 24 Hz, not
+200 Hz, and a band cannot hold content above its edge, so nothing is lost. And
+the bands are transformed in parallel (6 workers by default,
+`FAST_FA_WORKERS`).
+
+Measured on the bundled demo, eight channels, 30 s at 1 kHz:
+
+| pipeline | per channel | four minutes of audio |
+| --- | --- | --- |
+| 35-band reference (ssqueezepy, full rate, 32 voices) | ~17 s | — |
+| filter and aggregate, as shipped (wsstpy, decimated, 16 voices) | 2.0 s | 8 channels in 16.5 s |
+
+Agreement with the reference on the demo, NFI in per cent:
+
+| muscle | reference | shipped |
+| --- | --- | --- |
+| VL | −0.0 | −0.0 |
+| VM | −0.0 | −0.0 |
+| RF | 0.0 | 0.0 |
+| BF | 8.0 | 8.3 |
+| ST | 9.5 | 12.8 |
+| TA | 0.0 | −0.0 |
+| GM | 41.9 | 40.6 |
+| GL | 41.5 | 42.7 |
+
+Same status on all eight channels. ST is the largest difference at 3.3 points,
+which does not move its class.
+
+The aggregate's frames follow the slowest band, so each band is put back on the
+recording's own time base before summing; otherwise a 30 s recording would be
+measured as 3.75 s long and rejected by the duration guard.
