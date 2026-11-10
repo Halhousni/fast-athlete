@@ -13,9 +13,7 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends git \
  && rm -rf /var/lib/apt/lists/*
 
-ARG FAST_BUILD=local
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    FAST_BUILD=${FAST_BUILD} \
     PYTHONUNBUFFERED=1 \
     FAST_DATA_DIR=/data \
     FAST_BIND=0.0.0.0 \
@@ -32,6 +30,11 @@ COPY app.py engine.py ingest.py store.py bowen_centroid.py version.py ./
 COPY templates ./templates
 COPY static ./static
 COPY demo.mp4 demo_recording.csv ./
+
+# The commit stamp goes in after the dependencies, so changing it does not
+# reinstall NumPy and SciPy.
+ARG FAST_BUILD=local
+ENV FAST_BUILD=${FAST_BUILD}
 
 # The database lives on a volume; the app must own it, and must not run as root.
 RUN useradd --system --uid 10001 --home /app fast \
