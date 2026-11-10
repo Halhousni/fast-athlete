@@ -279,6 +279,7 @@ async function analyse() {
       body: JSON.stringify({ session: up.session, muscles }),
     });
     state.analysis = { ...data, at: Date.now() };
+    state.checkedAt = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     state.saved = false;
     setStage('results');
     renderResults();
@@ -442,6 +443,7 @@ function cssVar(name) {
 /* Status names and colour tokens are not the same words on purpose: the status
    is a verdict, the token is a colour. */
 const STATUS_TOKEN = { green: '--ok', amber: '--warn', red: '--bad', grey: '--grey' };
+const VERDICT_CLASS = STATUS_TOKEN;
 
 /* The canvas only accepts rgb()/rgba() reliably, so tokens are converted. */
 function tokenRgb(name) {
@@ -890,9 +892,247 @@ function planeCard(results, title) {
   return card;
 }
 
-async function renderHome() {
-  await renderStrip();
+// ── home: the dial ─────────────────────────────────────────────────────────
+// One question, one answer. The ring is the traffic light bent into a circle:
+// three named zones, and a marker at where today's reading landed.
+const DIAL = { size: 1200, radius: 552 };
+const ZONES = [[0.00, 0.34, '--ok', 'READY'],
+               [0.34, 0.67, '--warn', 'EASY'],
+               [0.67, 1.00, '--bad', 'REST']];
+const VERDICT_WORD = { green: 'ready', amber: 'ease off', red: 'rest it', grey: 'no reading' };
+const DIAL_WORD = { green: 'READY', amber: 'EASY', red: 'REST', grey: '—' };
+const RANK = { red: 3, amber: 2, green: 1, grey: 0 };
+
+function drawDial(canvas, strip, opts) {
+  if (!canvas) return;
+  const options = opts || {};
+  const status = options.status || 'grey';
+  const W = DIAL.size, cx = W / 2, cy = W / 2, R = DIAL.radius;
+  canvas.width = W; canvas.height = W;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, W, W);
+
+  // three zones
+  for (const [from, to, token, word] of ZONES) {
+    const a0 = -Math.PI / 2 + from * Math.PI * 2;
+    const a1 = -Math.PI / 2 + to * Math.PI * 2;
+    ctx.beginPath(); ctx.arc(cx, cy, R, a0, a1);
+    ctx.strokeStyle = tokenRgb(token);
+    ctx.globalAlpha = options.example ? 0.10 : (word === DIAL_WORD[status] ? 0.42 : 0.20);
+    ctx.lineWidth = 14; ctx.stroke();
+    ctx.globalAlpha = 1;
+    const mid = (a0 + a1) / 2;
+    ctx.fillStyle = cssVar('--text-2');
+    ctx.font = '600 17px ui-monospace, SFMono-Regular, Menlo, monospace';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(word, cx + Math.cos(mid) * (R + 40), cy + Math.sin(mid) * (R + 40));
+  }
+
+  // the marker: how spent the muscle is, not how far through a task
+  if (!options.example && status !== 'grey') {
+    const frac = Math.min(0.97, 1 - Math.max(0, Math.min(1, (options.score || 0) / 100)));
+    const a = -Math.PI / 2 + frac * Math.PI * 2;
+    const x = cx + Math.cos(a) * R, y = cy + Math.sin(a) * R;
+    ctx.beginPath(); ctx.arc(x, y, 11, 0, Math.PI * 2);
+    ctx.fillStyle = cssVar('--text'); ctx.fill();
+    ctx.beginPath(); ctx.arc(x, y, 5.5, 0, Math.PI * 2);
+    ctx.fillStyle = tokenRgb(VERDICT_CLASS[status]); ctx.fill();
+  }
+
+  // faint concentric rules
+  for (let r = 140; r <= 520; r += 40) {
+    ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.strokeStyle = cssVar('--line'); ctx.globalAlpha = 0.5;
+    ctx.lineWidth = 1.2; ctx.stroke(); ctx.globalAlpha = 1;
+  }
+
+  // the recording, engraved: one hair per instant, radius = its frequency
+  if (strip && strip.bytes) {
+    const { cols, rows, bytes } = strip;
+    const step = window.innerWidth < 700 ? 2 : 1;
+    for (let k = 0; k < cols; k += step) {
+      let best = 0, row = 0;
+      for (let i = 0; i < rows; i += 1) {
+        const v = bytes[i * cols + k];
+        if (v > best) { best = v; row = i; }
+      }
+      const theta = (k / cols) * Math.PI * 2 - Math.PI / 2;
+      const f = row / (rows - 1);
+      const r = 150 + f * 400;
+      const len = 74 + (best / 255) * 130;
+      const inner = r - len * 0.45, outer = r + len * 0.55;
+      const g = ctx.createLinearGradient(cx + Math.cos(theta) * inner, cy + Math.sin(theta) * inner,
+                                         cx + Math.cos(theta) * outer, cy + Math.sin(theta) * outer);
+      g.addColorStop(0, 'rgba(250,250,255,.04)');
+      g.addColorStop(0.5, `rgba(250,250,255,${(0.26 + (best / 255) * 0.62).toFixed(3)})`);
+      g.addColorStop(1, 'rgba(250,250,255,.03)');
+      ctx.beginPath();
+      ctx.moveTo(cx + Math.cos(theta) * inner, cy + Math.sin(theta) * inner);
+      ctx.lineTo(cx + Math.cos(theta) * outer, cy + Math.sin(theta) * outer);
+      ctx.strokeStyle = g; ctx.lineWidth = 1.5; ctx.stroke();
+    }
+    // the median frequency, in the verdict's colour
+    ctx.beginPath();
+    (strip.mdf || []).forEach((f, k) => {
+      if (!f) return;
+      const theta = (k / cols) * Math.PI * 2 - Math.PI / 2;
+      const r = 150 + ((f - (strip.f0 || 1)) / ((strip.f1 || 35) - (strip.f0 || 1))) * 400;
+      const x = cx + Math.cos(theta) * r, y = cy + Math.sin(theta) * r;
+      k ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+    });
+    ctx.strokeStyle = cssVar(VERDICT_CLASS[status] || '--grey');
+    ctx.globalAlpha = options.example ? 0.35 : 0.95;
+    ctx.lineWidth = 3.2; ctx.stroke(); ctx.globalAlpha = 1;
+  }
+
+  // subject, verdict, age -- read as one sentence
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillStyle = cssVar('--text-3');
+  ctx.font = '500 24px ui-monospace, SFMono-Regular, Menlo, monospace';
+  ctx.fillText((options.subject || '').toUpperCase(), cx, cy - 78);
+  ctx.fillStyle = cssVar('--text');
+  ctx.font = `300 ${String(options.word || '').length > 5 ? 58 : 96}px `
+    + '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+  ctx.fillText(options.word || '', cx, cy + 8);
+  ctx.fillStyle = cssVar('--text-3');
+  ctx.font = '400 21px ui-monospace, SFMono-Regular, Menlo, monospace';
+  ctx.fillText(options.foot || '', cx, cy + 78);
 }
+
+// The word an athlete uses, not the one on the electrode.
+const PLAIN_NAME = { VL: 'quad', VM: 'quad', RF: 'quad', BF: 'hamstring',
+                     ST: 'hamstring', TA: 'shin', GM: 'calf', GL: 'calf' };
+
+function plainName(result) {
+  return PLAIN_NAME[result.id] || 'muscle';
+}
+
+function muscleName(result) {
+  const up = state.upload;
+  if (up && up.muscles) {
+    const match = up.muscles.find((m) => m.column === result.column && m.recognised);
+    if (match && match.name) return match.name;
+  }
+  return result.id || 'muscle';
+}
+
+const HOME_COPY = {
+  red: (name) => `Your ${name} is still showing fatigue. Skip it today and check `
+    + 'again tomorrow before you load it.',
+  amber: (name) => `Your ${name} is carrying some fatigue. Keep the volume down `
+    + 'today and check again tomorrow.',
+  green: (name) => `Your ${name} has recovered. Load it as planned today.`,
+};
+
+function whyPlain(result) {
+  const slow = Math.abs(Math.round(result.delta_mdf || 0));
+  const strong = Math.round(result.delta_rms || 0);
+  const tail = result.status === 'red'
+    ? 'That combination means it had not recovered.'
+    : result.status === 'amber'
+      ? 'That combination means it has started to tire.'
+      : 'Neither moved much, so there is no sign of fatigue.';
+  return `During your 30-second hold the signal got ${slow} % slower and `
+    + `${strong} % stronger. A tired muscle does both. ${tail}`;
+}
+
+async function renderHome() {
+  const analysis = state.analysis;
+  const results = analysis ? Object.values(analysis.results || {}) : [];
+  const scored = results.filter((r) => ['green', 'amber', 'red'].includes(r.status));
+  const worst = scored.sort((a, b) => (RANK[b.status] || 0) - (RANK[a.status] || 0))[0] || null;
+
+  let strip = worst && worst.strip && worst.strip.grid ? worst.strip : null;
+  let example = false;
+  if (!strip) {
+    try {
+      const demo = await loadStrip();
+      strip = Object.assign({}, demo);
+      example = true;
+    } catch (e) { strip = null; }
+  }
+  if (strip && strip.grid && !strip.bytes) {
+    strip.bytes = Uint8Array.from(atob(strip.grid), (c) => c.charCodeAt(0));
+  }
+
+  const name = worst ? muscleName(worst) : 'calf';
+  const plain = worst ? plainName(worst) : 'calf';
+  const status = worst ? worst.status : 'grey';
+
+  $('#home-ask').textContent = worst
+    ? `Checked ${(state.checkedAt || 'just now').toLowerCase()}`
+    : 'No check yet today';
+  $('#home-title').textContent = worst ? `Is your ${plain} ready?` : 'Check your calf.';
+  $('#home-lead').textContent = worst
+    ? HOME_COPY[status](plain)
+    : 'Thirty seconds of signal from one muscle tells you whether it has '
+      + 'recovered enough to load today.';
+
+  const verdict = $('#home-verdict');
+  if (worst) {
+    verdict.hidden = false;
+    verdict.querySelector('i').style.background = cssVar(VERDICT_CLASS[status]);
+    verdict.querySelector('i').style.boxShadow = `0 0 0 4px ${tokenRgb(VERDICT_CLASS[status])}33, `
+      + `0 0 20px ${tokenRgb(VERDICT_CLASS[status])}88`;
+    $('#home-verdict-text').textContent = `Right now: ${VERDICT_WORD[status]}`;
+    $('#home-verdict-text').style.color = cssVar(VERDICT_CLASS[status]);
+  } else {
+    verdict.hidden = true;
+  }
+
+  // the why-this-colour panel
+  const more = $('#home-more');
+  more.hidden = !worst;
+  if (worst) {
+    $('#why-word').textContent = { green: 'green', amber: 'amber', red: 'red' }[status];
+    $('#why-plain').textContent = whyPlain(worst);
+    const list = $('#det-body');
+    list.replaceChildren();
+    const rows = [['Muscle', name],
+                  ['Frequency', `${worst.mdf_start} → ${worst.mdf_end} Hz, ${Math.round(worst.delta_mdf)} %`],
+                  ['Amplitude', `${worst.delta_rms > 0 ? '+' : ''}${Math.round(worst.delta_rms)} % RMS`],
+                  ['Method', 'Zhao et al. 2025']];
+    for (const [label, value] of rows) {
+      list.append(el('dt', { text: label }), el('dd', { text: value }));
+    }
+  }
+
+  drawDial($('#home-disc'), strip, {
+    status, example,
+    score: worst ? worst.score : 0,
+    subject: example ? 'Example' : plain.toUpperCase(),
+    word: example ? 'NO CHECK' : DIAL_WORD[status],
+    foot: example ? 'NO READING YET' : (state.checkedAt || 'just now').toUpperCase(),
+  });
+  $('#home-disc-label').textContent = example
+    ? 'example recording · your own check fills this'
+    : 'your own recording · 30 s hold';
+
+  // the foot: one dot per check, newest last
+  const foot = $('#home-foot');
+  foot.replaceChildren();
+  const history = (state.history || []).slice(0, 11).reverse();
+  const dotStatus = history.length
+    ? history.map((row) => row.status)
+    : (worst ? [status] : []);
+  if (!dotStatus.length) {
+    foot.append(el('span', { class: 'foot-txt', text: 'No checks yet' }));
+    return;
+  }
+  foot.append(el('span', {
+    class: 'foot-txt',
+    text: dotStatus.length === 1 ? '1 check' : `last ${dotStatus.length} checks`,
+  }));
+  const dots = el('span', { class: 'foot-dots' });
+  for (const s of dotStatus) {
+    dots.append(el('i', { style: `background:${cssVar(VERDICT_CLASS[s] || '--grey')}` }));
+  }
+  foot.append(dots);
+  if (dotStatus.length > 1) {
+    foot.append(el('span', { class: 'foot-txt', text: 'newest on the right' }));
+  }
+}
+
 
 // ── train ───────────────────────────────────────────────────────────────────
 const CALL = {
@@ -1405,6 +1645,14 @@ function wire() {
   });
 
   $('#home-start').addEventListener('click', () => nav('check'));
+  $('#home-start-m').addEventListener('click', () => nav('check'));
+  $('#why').addEventListener('click', () => {
+    $('#why-body').classList.toggle('open');
+    $('#why').classList.toggle('open');
+  });
+  $('#det').addEventListener('click', () => {
+    $('#det-body').classList.toggle('open');
+  });
 
   $('#sheet-close').addEventListener('click', () => { $('#sheet').hidden = true; });
   $('#sheet').addEventListener('click', (event) => {

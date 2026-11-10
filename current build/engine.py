@@ -25,6 +25,7 @@ diagnosis.
 """
 from __future__ import annotations
 
+import base64
 import os
 from concurrent.futures import ThreadPoolExecutor
 from fractions import Fraction
@@ -412,6 +413,59 @@ def classify(Tx: np.ndarray, freqs: np.ndarray, fs: float) -> dict:
                 tip=_TIPS[status])
 
 
+STRIP_COLS, STRIP_ROWS = 120, 68
+STRIP_FLOOR_DB = -40.0
+
+
+def strip_payload(power: np.ndarray, freqs: np.ndarray, seconds: float,
+                  cols: int = STRIP_COLS, rows: int = STRIP_ROWS) -> dict:
+    """The plane as the home screen draws it: 120 x 68, 0-255, plus the MDF trace.
+
+    The client only needs a small grid and one line, so the plane is reduced here
+    rather than shipped whole.
+    """
+    power = np.asarray(power, dtype=float)
+    if power.ndim != 2 or power.size == 0:
+        return {}
+    n_frames = power.shape[1]
+    cols = max(2, min(cols, n_frames))
+    t_idx = np.unique(np.linspace(0, n_frames, cols + 1).astype(int))
+    f_idx = np.unique(np.linspace(0, len(freqs), rows + 1).astype(int))
+    # reduceat sums each block; the divisor is the block width.
+    by_time = np.add.reduceat(power, t_idx[:-1], axis=1) / np.diff(t_idx)
+    block = np.add.reduceat(by_time, f_idx[:-1], axis=0) / np.diff(f_idx)[:, None]
+    block = np.nan_to_num(block, nan=0.0, posinf=0.0, neginf=0.0)
+    rows = block.shape[0]
+
+    peak = float(block.max()) or 1.0
+    db = 10.0 * np.log10(np.maximum(block, peak * 1e-9) / peak)
+    value = np.clip((db - STRIP_FLOOR_DB) / -STRIP_FLOOR_DB, 0.0, 1.0) ** 0.85
+
+    f_lo_edges = freqs[np.clip(f_idx[:-1], 0, len(freqs) - 1)]
+    f_hi_edges = freqs[np.clip(f_idx[1:] - 1, 0, len(freqs) - 1)]
+    mdf = []
+    for j in range(block.shape[1]):
+        spectrum = block[:, j]
+        total = float(spectrum.sum())
+        if total <= 0:
+            mdf.append(None)
+            continue
+        cumulative = np.cumsum(spectrum) / total
+        k = min(int(np.searchsorted(cumulative, 0.5)), len(freqs) - 1)
+        low = cumulative[k - 1] if k else 0.0
+        span = cumulative[k] - low
+        frac = 0.0 if span <= 0 else (0.5 - low) / span
+        f_lo = float(f_lo_edges[min(k, len(f_lo_edges) - 1)])
+        f_hi = float(f_hi_edges[min(k, len(f_hi_edges) - 1)])
+        mdf.append(round(f_lo + frac * (f_hi - f_lo), 2))
+
+    return {'cols': int(block.shape[1]), 'rows': int(rows),
+            'f0': float(freqs[0]), 'f1': float(f_hi_edges[-1]),
+            'seconds': round(float(seconds), 1), 'mdf': mdf,
+            'grid': base64.b64encode(
+                (value * 255).astype(np.uint8).tobytes()).decode()}
+
+
 def analyse_channel(sig: np.ndarray, fs: float, muscle_id: str) -> dict:
     """Full analysis for one channel. Input must be finite and non-flat."""
     sig = np.asarray(sig, dtype=float)
@@ -440,6 +494,7 @@ def analyse_channel(sig: np.ndarray, fs: float, muscle_id: str) -> dict:
             if key in fatigue:
                 result[key] = fatigue[key]
     result['analysed_seconds'] = round(len(cut) / fs, 1)
+    result['strip'] = strip_payload(Tx, freqs, len(resampled) / true_fs)
     return result
 
 
