@@ -183,7 +183,7 @@ function renderFile() {
   const notices = clear($('#file-notices'));
   if (up.truncated) {
     notices.append(el('div', { class: 'notice notice--warn' }, ICON.warn(),
-      el('span', { text: `This recording is ${formatDuration(up.duration)} long. FAST analyses the first 30 seconds.` })));
+      el('span', { text: `This recording is ${formatDuration(up.duration)} long. FAST Athlete analyses the first 30 seconds.` })));
   }
   for (const dropped of up.dropped || []) {
     notices.append(el('div', { class: 'notice notice--warn' }, ICON.warn(),
@@ -202,7 +202,7 @@ function renderFile() {
         : up.fs_source === 'time-column'
           ? 'Read from the time column in the file.'
           : 'Read from the file header.')
-    : 'This file does not say. FAST cannot measure frequencies without it.';
+    : 'This file does not say. FAST Athlete cannot measure frequencies without it.';
   $('#rate-card').classList.toggle('notice--warn', !known);
 
   renderMuscleChoices();
@@ -220,7 +220,7 @@ function renderMuscleChoices() {
   const otherBox = clear($('#other-channels'));
   if (others.length) {
     otherBox.append(el('h3', { class: 'h-group', text: 'Other channels' }),
-      el('p', { class: 'meta', text: 'Channels FAST did not recognise. Check them only if you know they are EMG.' }));
+      el('p', { class: 'meta', text: 'Channels FAST Athlete did not recognise. Check them only if you know they are EMG.' }));
     const list = el('div', { class: 'choices' });
     for (const channel of others) {
       list.append(choiceFor(channel, channel.column, channel.column, 'Unrecognised channel'));
@@ -843,7 +843,7 @@ async function renderProfile() {
 
   box.append(el('div', { class: 'card' },
     el('h3', { text: 'About' }),
-    el('p', { class: 'meta mt-8', text: 'FAST estimates muscle fatigue from surface EMG. Scores run from 0 to 100: 70 and above reads recovered, 40 to 69 some fatigue, below 40 needs rest. Results are stored on this server.' }),
+    el('p', { class: 'meta mt-8', text: 'FAST Athlete estimates muscle fatigue from surface EMG. Scores run from 0 to 100: 70 and above reads recovered, 40 to 69 some fatigue, below 40 needs rest. Results are stored on this server.' }),
     el('p', { class: 'meta mt-8', text: 'The method is a research prototype. It is not a diagnosis.' }),
     el('p', { class: 'meta mt-12', id: 'version-line', text: '' })));
 
