@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>FAST — muscle fatigue check</title>
+<link rel="stylesheet" href="/static/app.css">
+<link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+<script src="/static/theme.js"></script>
+</head>
+<body>
+
+<header class="topbar" id="topbar">
+  <a class="brand" href="#" data-nav="check"><span class="mark">F</span>FAST</a>
+  <span class="spacer"></span>
+  <button class="iconbtn" id="theme-toggle" type="button" aria-label="Change theme">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 3v2M12 19v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M3 12h2M19 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+  </button>
+  <button class="iconbtn" id="profile-btn" type="button" aria-label="Profile">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><circle cx="12" cy="8" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0"/></svg>
+  </button>
+</header>
+
+<main class="wrap">
+
+  <!-- ══ CHECK ══════════════════════════════════════════════════════════ -->
+  <section id="screen-check" aria-labelledby="check-title">
+
+    <div id="stage-idle">
+      <div class="verdict">
+        <h1 id="check-title">How are your muscles?</h1>
+        <p class="lede">Measure how recovered each muscle is from a recording of its
+          electrical activity, and see which ones can train today.</p>
+      </div>
+
+      <label class="dropzone" id="dropzone">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4"/><path d="M7 9l5-5 5 5"/><path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
+        <strong>Choose a recording</strong>
+        <small>CSV, TXT or MAT</small>
+        <input type="file" id="file-input" accept=".csv,.txt,.mat,.CSV,.TXT,.MAT" hidden>
+      </label>
+
+      <div class="btn-row mt-12">
+        <button class="btn btn--quiet grow" id="demo-btn" type="button">
+          Try a sample recording
+        </button>
+      </div>
+
+      <div id="home-last"></div>
+    </div>
+
+    <div id="stage-file" class="hidden">
+      <h1>Recording</h1>
+      <div class="card mt-16">
+        <dl class="filemeta" id="file-meta"></dl>
+        <div id="file-notices"></div>
+      </div>
+
+      <div class="card" id="rate-card">
+        <h3>Sampling rate</h3>
+        <p class="meta" id="rate-explain"></p>
+        <label class="field mt-12">
+          <span>Hertz</span>
+          <input type="number" id="rate-input" min="100" max="20000" step="1"
+                 inputmode="numeric" placeholder="e.g. 2000">
+        </label>
+        <p class="hint">Printed on your amplifier or in the export settings. FAST
+          analyses 1–35 Hz, so a rate between 200 and 2000 Hz is plenty.</p>
+      </div>
+
+      <h2 class="h-section">Which muscles?</h2>
+      <p class="meta" id="selection-count"></p>
+      <div class="choices choices--grid" id="muscle-choices"></div>
+      <div id="other-channels"></div>
+
+      <button class="btn btn--primary mt-16" id="analyse-btn" type="button">
+        Check fatigue
+      </button>
+    </div>
+
+    <div id="stage-progress" class="hidden">
+      <div class="progress">
+        <div class="spinner" role="status" aria-live="polite"></div>
+        <div>
+          <p id="progress-text">Measuring…</p>
+          <p class="meta" id="progress-sub"></p>
+        </div>
+      </div>
+    </div>
+
+    <div id="stage-results" class="hidden"></div>
+  </section>
+
+  <!-- ══ TRAIN ═══════════════════════════════════════════════════════════ -->
+  <section id="screen-train" class="hidden" aria-labelledby="train-title">
+    <h1 id="train-title">Today</h1>
+    <div id="train-body"></div>
+  </section>
+
+  <!-- ══ HISTORY ═════════════════════════════════════════════════════════ -->
+  <section id="screen-history" class="hidden" aria-labelledby="history-title">
+    <h1 id="history-title">History</h1>
+    <div id="history-body"></div>
+  </section>
+
+  <!-- ══ PROFILE ═════════════════════════════════════════════════════════ -->
+  <section id="screen-profile" class="hidden" aria-labelledby="profile-title">
+    <h1 id="profile-title">Who is checking?</h1>
+    <div id="profile-body"></div>
+  </section>
+
+</main>
+
+<nav class="tabs" id="tabs" aria-label="Sections">
+  <div class="inner">
+    <button class="tab" type="button" data-nav="check" aria-selected="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l2-5 3 10 2-5h5"/></svg>
+      Check
+    </button>
+    <button class="tab" type="button" data-nav="train" aria-selected="false">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6M7 7v10M17 7v10M20 9v6M7 12h10"/></svg>
+      Train
+    </button>
+    <button class="tab" type="button" data-nav="history" aria-selected="false">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V5"/><path d="M4 19h16"/><path d="M8 15v-4M13 15V7M18 15v-6"/></svg>
+      History
+    </button>
+    <button class="tab" type="button" data-nav="profile" aria-selected="false">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0"/></svg>
+      Profile
+    </button>
+  </div>
+</nav>
+
+<div class="overlay" id="sheet" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title">
+    <header>
+      <h2 id="sheet-title"></h2>
+      <button class="iconbtn" id="sheet-close" type="button" aria-label="Close">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </header>
+    <div id="sheet-body"></div>
+  </div>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script src="/static/vendor/musclemap.min.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>
