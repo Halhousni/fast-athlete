@@ -40,8 +40,9 @@ store = Store(DATA_DIR)
 sessions = SessionStore()
 analyse_slots = threading.BoundedSemaphore(MAX_ANALYSES_AT_ONCE)
 # Reading a file is the expensive part of an upload and it runs in the
-# threadpool, so it is capped as well as the analysis.
-ingest_slots = threading.BoundedSemaphore(MAX_ANALYSES_AT_ONCE)
+# threadpool. One at a time: two 24 MB parses together exceed the container's
+# 1 GB (measured 1.1-1.2 GB).
+ingest_slots = threading.BoundedSemaphore(1)
 
 
 # ── models ───────────────────────────────────────────────────────────────────
@@ -137,7 +138,10 @@ async def healthz():
 @app.post('/upload')
 def upload(file: UploadFile = File(...), fs: float | None = Form(default=None)):
     started = time.time()
-    filename = (file.filename or '')[:120]
+    # The full name decides the format (.mat), so it goes to the parser; only
+    # the stored and displayed copy is shortened.
+    original = file.filename or ''
+    filename = original[:120]
     chunks, total = [], 0
     while True:
         chunk = file.file.read(1024 * 1024)
@@ -150,6 +154,7 @@ def upload(file: UploadFile = File(...), fs: float | None = Form(default=None)):
                                    f'Export a shorter recording.'}, status=413)
         chunks.append(chunk)
     content = b''.join(chunks)
+    chunks.clear()
 
     if not ingest_slots.acquire(timeout=60):
         return _json({'error': 'The server is busy reading files. Try again in a '
@@ -157,7 +162,7 @@ def upload(file: UploadFile = File(...), fs: float | None = Form(default=None)):
     try:
         # The athlete's rate goes in, so a file without one can still have its
         # gaps interpolated in seconds rather than in samples.
-        parsed = ingest.load(content, filename,
+        parsed = ingest.load(content, original,
                              float(fs) if fs is not None else None)
     except ingest.IngestError as exc:
         return _json({'error': str(exc)}, status=400)
@@ -390,7 +395,13 @@ async def history(request: Request, profile_id: int | None = None):
 async def body_limit(request: Request, call_next):
     if request.url.path == '/upload':
         length = request.headers.get('content-length', '')
-        if length.isdigit() and int(length) > MAX_UPLOAD_BYTES + 65536:
+        if not length.isdigit():
+            # Without a declared length the body is streamed past this check and
+            # spooled to disk by the multipart parser. Browsers and curl -F
+            # always send one.
+            return _json({'error': 'Send the file with a Content-Length header.'},
+                         status=411)
+        if int(length) > MAX_UPLOAD_BYTES + 65536:
             return _json({'error': f'That file is larger than '
                                    f'{MAX_UPLOAD_BYTES // (1024 * 1024)} MB. '
                                    f'Export a shorter recording.'}, status=413)
