@@ -1,44 +1,44 @@
 /* FAST — one token set, two themes, no accent doing two jobs.
 
-Colour: three status hues carry the meaning, one ember accent is reserved for
-actions. Every text pair below is at least 4.5:1 in the theme it is used in.
+Colour: the three status hues are the only hue in the interface — the accent is
+the ink itself, warm bone on navy. A coloured mark therefore always means a
+verdict. Every text pair below is at least 4.5:1 in the theme it is used in.
 Type: one family (the system stack), six sizes, two weights.
 Spacing: 4 / 8 / 12 / 16 / 24 / 32 / 48 only.
 */
 
 :root {
-  /* The instrument: near-black ground, one cyan signal colour, three status
-     hues. Cyan is the accent and the "measured" colour; it is never used for a
-     status, so a cyan mark always means "this is the instrument", not "this is
-     fine". */
-  --bg: #0D0D0F;
-  --surface: #161618;
-  --raised: #1D1D21;
-  --line: #2A2A2F;
-  --line-strong: #46464E;
-  --text: #F3F3F5;
-  --text-2: #A6A6AF;
-  --text-3: #8C8C95;
-  --accent: #16E0F0;
-  --accent-hover: #5CEEF9;
-  --accent-ink: #041315;
-  --accent-dim: rgba(22, 224, 240, .14);
-  --ok: #3CE08C;
-  --ok-soft: #10281D;
-  --warn: #FFB020;
-  --warn-soft: #2C2210;
-  --bad: #FF5468;
-  --bad-soft: #2E1418;
-  --grey: #8C8C95;
-  --grey-soft: #1D1D21;
-  --focus: #16E0F0;
+  /* The plate: a navy-black ground, warm bone ink, and no accent hue at all.
+     The only colour in the interface is the traffic light, so a coloured mark
+     always means a verdict and never decoration. */
+  --bg: #0E0E18;
+  --surface: #16161F;
+  --raised: #1E1E29;
+  --line: #2A2A38;
+  --line-strong: #46465A;
+  --text: #F2EFE8;
+  --text-2: #A9A7B0;
+  --text-3: #8C8A94;
+  --accent: #F2EFE8;
+  --accent-hover: #FFFFFF;
+  --accent-ink: #0E0E18;
+  --accent-dim: rgba(242, 239, 232, .12);
+  --ok: #46E0A2;
+  --ok-soft: #12241E;
+  --warn: #F6B73C;
+  --warn-soft: #2A2113;
+  --bad: #FF5F6D;
+  --bad-soft: #2C1519;
+  --grey: #8C8A94;
+  --grey-soft: #1E1E29;
+  --focus: #F2EFE8;
   --radius: 3px;
   --radius-card: 6px;
   --rail-h: 68px;
   --spine: 0px;
   --shadow: 0 1px 0 rgba(255, 255, 255, .04) inset,
             0 18px 40px rgba(0, 0, 0, .45);
-  --glow: 0 0 0 1px rgba(22, 224, 240, .35), 0 0 28px rgba(22, 224, 240, .18);
+  --glow: 0 0 0 1px rgba(242, 239, 232, .28), 0 0 28px rgba(242, 239, 232, .10);
   --step: 4px;
   color-scheme: dark;
 }
@@ -46,46 +46,46 @@ Spacing: 4 / 8 / 12 / 16 / 24 / 32 / 48 only.
 /* Dark is the default: this is an instrument, and the toggle is explicit. */
 
 :root[data-theme="dark"] {
-  --bg: #0D0D0F;
-  --surface: #161618;
-  --raised: #1D1D21;
-  --line: #2A2A2F;
-  --line-strong: #46464E;
-  --text: #F3F3F5;
-  --text-2: #A6A6AF;
-  --text-3: #8C8C95;
-  --accent: #16E0F0;
-  --accent-hover: #5CEEF9;
-  --accent-ink: #041315;
-  --accent-dim: rgba(22, 224, 240, .14);
-  --ok: #3CE08C;
-  --ok-soft: #10281D;
-  --warn: #FFB020;
-  --warn-soft: #2C2210;
-  --bad: #FF5468;
-  --bad-soft: #2E1418;
-  --grey: #8C8C95;
-  --grey-soft: #1D1D21;
-  --focus: #16E0F0;
+  --bg: #0E0E18;
+  --surface: #16161F;
+  --raised: #1E1E29;
+  --line: #2A2A38;
+  --line-strong: #46465A;
+  --text: #F2EFE8;
+  --text-2: #A9A7B0;
+  --text-3: #8C8A94;
+  --accent: #F2EFE8;
+  --accent-hover: #FFFFFF;
+  --accent-ink: #0E0E18;
+  --accent-dim: rgba(242, 239, 232, .12);
+  --ok: #46E0A2;
+  --ok-soft: #12241E;
+  --warn: #F6B73C;
+  --warn-soft: #2A2113;
+  --bad: #FF5F6D;
+  --bad-soft: #2C1519;
+  --grey: #8C8A94;
+  --grey-soft: #1E1E29;
+  --focus: #F2EFE8;
   --shadow: 0 1px 0 rgba(255, 255, 255, .04) inset,
             0 18px 40px rgba(0, 0, 0, .45);
-  --glow: 0 0 0 1px rgba(22, 224, 240, .35), 0 0 28px rgba(22, 224, 240, .18);
+  --glow: 0 0 0 1px rgba(242, 239, 232, .28), 0 0 28px rgba(242, 239, 232, .10);
   color-scheme: dark;
 }
 
 :root[data-theme="light"] {
-  --bg: #F4F4F5;
-  --surface: #FFFFFF;
-  --raised: #EDEDEF;
-  --line: #DCDCE0;
-  --line-strong: #B6B6BC;
-  --text: #121214;
-  --text-2: #55555E;
-  --text-3: #6B6B74;
-  --accent: #00879B;
-  --accent-hover: #006E7E;
-  --accent-ink: #FFFFFF;
-  --accent-dim: rgba(0, 135, 155, .12);
+  --bg: #F3F1EA;
+  --surface: #FBFAF6;
+  --raised: #ECE9E1;
+  --line: #DAD6CB;
+  --line-strong: #B4AF9F;
+  --text: #12131A;
+  --text-2: #4E505C;
+  --text-3: #6A6C78;
+  --accent: #12131A;
+  --accent-hover: #000000;
+  --accent-ink: #F7F6F1;
+  --accent-dim: rgba(18, 19, 26, .08);
   --ok: #0E7B4A;
   --ok-soft: #E4F3EB;
   --warn: #8A5A08;
@@ -94,9 +94,9 @@ Spacing: 4 / 8 / 12 / 16 / 24 / 32 / 48 only.
   --bad-soft: #FAE7EA;
   --grey: #6B6B74;
   --grey-soft: #EFEFF1;
-  --focus: #00879B;
+  --focus: #12131A;
   --shadow: 0 1px 2px rgba(18, 18, 20, .06), 0 8px 24px rgba(18, 18, 20, .08);
-  --glow: 0 0 0 1px rgba(0, 135, 155, .3);
+  --glow: 0 0 0 1px rgba(18, 19, 26, .25);
   color-scheme: light;
 }
 
@@ -557,7 +557,7 @@ details.disclose dd { color: var(--text-2); }
 
 body {
   background:
-    radial-gradient(900px 500px at 50% -180px, rgba(22, 224, 240, .10), transparent 70%),
+    radial-gradient(900px 500px at 50% -180px, rgba(242, 239, 232, .05), transparent 70%),
     var(--bg);
 }
 
