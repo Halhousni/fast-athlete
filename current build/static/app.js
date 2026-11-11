@@ -1510,7 +1510,7 @@ async function renderTrain() {
   if (!latest) {
     const stale = history.length
       ? `The last check was ${formatDate(history[0].ts)}. Check again and the call for today appears here.`
-      : 'Nothing to go on yet. Check your muscles first and the call for today appears here.';
+      : 'Nothing to go on yet. Check a muscle and the call for today appears here.';
     box.append(el('div', { class: 'card empty' }, ICON.empty(),
       el('p', { text: stale }),
       el('button', { class: 'btn btn--quiet mt-16', type: 'button', onclick: () => nav('check') }, 'Start a check')));
