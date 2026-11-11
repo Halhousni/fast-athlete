@@ -656,8 +656,16 @@ details[open] > .about-more summary::after,
 
 .disc { display: grid; justify-items: center; }
 .disc canvas { width: 100%; max-width: 560px; height: auto; display: block; }
+.disc-foot {
+  margin-top: 16px; display: flex; align-items: center; justify-content: center; gap: 14px;
+}
+.replay {
+  background: none; border: 0; cursor: pointer; padding: 6px 4px; min-height: 32px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--text-3);
+}
+.replay:hover { color: var(--text); }
 .disc-label {
-  margin-top: 16px; text-align: center;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 11px; letter-spacing: .13em; text-transform: uppercase; color: var(--text-3);
 }

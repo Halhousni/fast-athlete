@@ -948,36 +948,113 @@ function palette() {
 }
 
 // ── the engraving ─────────────────────────────────────────────────────────
-// Straight from the reference the client approved (001-etched-disc): one hair
-// per instant, radius from its dominant frequency, a gradient that fades at
-// both ends so the marks read as engraving rather than as bars, and a second
-// pass of half-scale ticks that gives the face its texture.
-const RING = 520;
+// The approved reference (001-etched-disc), ported: one hair per instant, a
+// gradient that fades at both ends so the marks read as engraving, a second
+// register of short ticks behind them, and a verdict line through the ridge.
+const RING = 540;
 const ART_IN = 140;
 const ART_SPAN = 380;
-const ART_STEP = (t, from, to) => from + Math.max(0, Math.min(1, t)) * (to - from);
+const COLS_FALLBACK = 120;
+const ART = (t) => ART_IN + Math.max(0, Math.min(1, t)) * ART_SPAN;
 
+let planeCache = { key: '', data: null };
 let engraveCache = { key: '', canvas: null };
 
-function dominating(bytes, cols, rows) {
-  const f = new Float32Array(cols);
+const median3 = (a) => a.slice().sort((x, y) => x - y)[1];
+
+// Peak per instant, refined to a fraction of a row, because a whole-row peak
+// quantises a quiet hold into a staircase; then a robust stretch so a narrow
+// power range still varies, and a 25th-percentile frequency for the flank ticks.
+function analysePlane(strip) {
+  const { cols, rows, bytes } = strip;
+  const freq = new Float32Array(cols);
   const power = new Float32Array(cols);
+  const low = new Float32Array(cols);
+
   for (let n = 0; n < cols; n += 1) {
-    let best = 0, row = 0;
+    let best = -1, row = 0;
     for (let i = 0; i < rows; i += 1) {
       const v = bytes[i * cols + n];
       if (v > best) { best = v; row = i; }
     }
-    f[n] = rows > 1 ? row / (rows - 1) : 0;
+    // The spectral centroid, not the peak: a single loud bin can jump between
+    // neighbouring frequencies and turn a glide into a staircase, while the
+    // centre of mass of the spectrum moves smoothly as the muscle tires.
+    let mass = 0, moment = 0;
+    for (let i = 0; i < rows; i += 1) {
+      const w = Math.pow(bytes[i * cols + n] / 255, 2);
+      mass += w;
+      moment += w * i;
+    }
+    freq[n] = mass > 0 ? (moment / mass) / Math.max(1, rows - 1) : row / Math.max(1, rows - 1);
     power[n] = best / 255;
+
+    // power-weighted 25th percentile row: where the signal starts, not peaks
+    let total = 0;
+    for (let i = 0; i < rows; i += 1) {
+      const w = bytes[i * cols + n] / 255;
+      total += w * w;
+    }
+    let acc = 0, cut = 0;
+    if (total > 0) {
+      for (let i = 0; i < rows; i += 1) {
+        const w = bytes[i * cols + n] / 255;
+        acc += w * w;
+        if (acc >= total * 0.25) { cut = i; break; }
+      }
+    }
+    low[n] = cut / Math.max(1, rows - 1);
   }
-  return { f, power };
+
+  // median-of-3 across time (not wrapped: time has ends)
+  const smooth = new Float32Array(cols);
+  for (let n = 0; n < cols; n += 1) {
+    smooth[n] = median3([freq[Math.max(0, n - 1)], freq[n], freq[Math.min(cols - 1, n + 1)]]);
+  }
+
+  // stretch power across the recording, unless the range is too flat to mean
+  const sorted = Array.from(power).sort((a, b) => a - b);
+  const p5 = sorted[Math.floor(cols * 0.05)];
+  const p95 = sorted[Math.min(cols - 1, Math.floor(cols * 0.95))];
+  const stretch = p95 - p5 >= 0.08;
+  const bloom = new Float32Array(cols);
+  for (let n = 0; n < cols; n += 1) {
+    bloom[n] = stretch ? Math.max(0, Math.min(1, (power[n] - p5) / (p95 - p5))) : power[n];
+  }
+  // Radius is the engine's own median frequency, drawn across the band this
+  // hold actually used: the hairs and the verdict line then sit on the same
+  // scale, and the line rides the ridge instead of floating beside it. Absolute
+  // hertz would stack a quiet recording on the hub and leave the face empty.
+  // Two quantities, two radii, as in the reference: a hair sits at its instant's
+  // spectral centre (the texture across the whole face), while the red line
+  // traces the median frequency through it (1-35 Hz). They are different
+  // measures and the approved design shows the line crossing the ridge.
+  const tOf = (hz) => Math.max(0, Math.min(1, (hz - 1) / 34));
+  const reach = new Float32Array(cols);
+  for (let n = 0; n < cols; n += 1) reach[n] = smooth[n];
+
+  return { freq: smooth, power: bloom, low, cols, rows, tOf, reach };
+}
+
+function planeFor(strip) {
+  const key = `${strip.cols}x${strip.rows}:${strip.bytes.length}`;
+  if (planeCache.key === key && planeCache.data) return planeCache.data;
+  planeCache = { key, data: analysePlane(strip) };
+  return planeCache.data;
+}
+
+function hairOf(plane, n) {
+  const p = plane.power[n];
+  const r = ART(plane.reach[n]);
+  const len = 56 + p * 104;
+  return { r, len, inner: r - len * 0.45, outer: r + len * 0.55, p };
 }
 
 function engravingFor(strip, faint) {
-  const { cols, rows, bytes } = strip;
-  const key = `${cols}x${rows}:${bytes.length}:${strip.mdf ? strip.mdf.length : 0}:`
-    + `${faint ? 'f' : 's'}:${palette().text}`;
+  const plane = planeFor(strip);
+  const { cols } = plane;
+  const key = `${strip.cols}x${strip.rows}:${strip.bytes.length}:${faint ? 'f' : 's'}:`
+    + palette().text;
   if (engraveCache.key === key && engraveCache.canvas) return engraveCache.canvas;
 
   const W = DIAL.size, c = document.createElement('canvas');
@@ -985,34 +1062,15 @@ function engravingFor(strip, faint) {
   const ctx = c.getContext('2d');
   const cx = W / 2, cy = W / 2;
   const colour = palette().text;
-  const { f, power } = dominating(bytes, cols, rows);
-  const dim = faint ? 0.78 : 1;
+  const dim = faint ? 0.55 : 1;
 
-  // the recording: one hair per instant
+  // the flank: short ticks at the foot of each column's energy, behind the hair
   for (let n = 0; n < cols; n += 1) {
+    const hair = hairOf(plane, n);
+    const rLow = ART(plane.tOf(plane.low[n]));
+    const offset = Math.max(30, Math.min(90, hair.r - rLow));
+    const r = hair.r - offset;
     const theta = (n / cols) * Math.PI * 2 - Math.PI / 2;
-    const r = ART_STEP(f[n], ART_IN, ART_IN + ART_SPAN);
-    const len = 66 + power[n] * 120;
-    const inner = r - len * 0.45, outer = r + len * 0.55;
-    const cos = Math.cos(theta), sin = Math.sin(theta);
-    const g = ctx.createLinearGradient(cx + cos * inner, cy + sin * inner,
-                                       cx + cos * outer, cy + sin * outer);
-    g.addColorStop(0, 'transparent');
-    g.addColorStop(0.5, colour);
-    g.addColorStop(1, 'transparent');
-    ctx.globalAlpha = (0.26 + Math.sqrt(power[n]) * 0.5) * dim;
-    ctx.strokeStyle = g;
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.moveTo(cx + cos * inner, cy + sin * inner);
-    ctx.lineTo(cx + cos * outer, cy + sin * outer);
-    ctx.stroke();
-  }
-
-  // the harmonic pass: twice as many, half as far out, a whisper
-  for (let n = 0; n < cols * 2; n += 1) {
-    const theta = (n / (cols * 2)) * Math.PI * 2 - Math.PI / 2;
-    const r = ART_STEP(f[Math.floor(n / 2)] * 0.55, ART_IN, ART_IN + ART_SPAN);
     const cos = Math.cos(theta), sin = Math.sin(theta);
     ctx.globalAlpha = 0.09 * dim;
     ctx.strokeStyle = colour;
@@ -1022,6 +1080,25 @@ function engravingFor(strip, faint) {
     ctx.lineTo(cx + cos * (r + 22), cy + sin * (r + 22));
     ctx.stroke();
   }
+
+  // the recording: one hair per instant
+  for (let n = 0; n < cols; n += 1) {
+    const hair = hairOf(plane, n);
+    const theta = (n / cols) * Math.PI * 2 - Math.PI / 2;
+    const cos = Math.cos(theta), sin = Math.sin(theta);
+    const g = ctx.createLinearGradient(cx + cos * hair.inner, cy + sin * hair.inner,
+                                       cx + cos * hair.outer, cy + sin * hair.outer);
+    g.addColorStop(0, 'transparent');
+    g.addColorStop(0.5, colour);
+    g.addColorStop(1, 'transparent');
+    ctx.globalAlpha = (0.20 + hair.p * 0.62) * dim;
+    ctx.strokeStyle = g;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(cx + cos * hair.inner, cy + sin * hair.inner);
+    ctx.lineTo(cx + cos * hair.outer, cy + sin * hair.outer);
+    ctx.stroke();
+  }
   ctx.globalAlpha = 1;
 
   engraveCache = { key, canvas: c };
@@ -1029,6 +1106,11 @@ function engravingFor(strip, faint) {
 }
 
 // ── the dial ──────────────────────────────────────────────────────────────
+const easeInOutSine = (u) => -(Math.cos(Math.PI * u) - 1) / 2;
+const easeOutCubic = (u) => 1 - Math.pow(1 - u, 3);
+
+const SLOW = /[?&]slow\b/.test(location.search);
+
 let dialLoop = 0;
 let dialPlayed = '';
 let dialStart = 0;
@@ -1049,10 +1131,11 @@ function animateDial(canvas, strip, opts, key) {
   }
   if (playing) return;
 
+  const DURATION = SLOW ? 2700 : 1150;
   dialStart = performance.now();
   const frame = (now) => {
     const state = dialState;
-    const t = Math.min(1, (now - dialStart) / 900);
+    const t = Math.min(1, (now - dialStart) / DURATION);
     drawDial(state.canvas, state.strip, Object.assign({}, state.opts, { progress: t }));
     if (t < 1) {
       dialLoop = requestAnimationFrame(frame);
@@ -1074,36 +1157,22 @@ function drawDial(canvas, strip, opts) {
   ctx.clearRect(0, 0, W, W);
 
   const shown = canvas.clientWidth || 560;
-  const typeK = shown < 420 ? 1.7 : 1;       // the reference sizes, phone-adjusted
+  const typeK = shown < 420 ? 1.7 : 1;
   const pal = palette();
   const p = options.progress === undefined ? 1 : options.progress;
   const clamp = (v) => Math.max(0, Math.min(1, v));
-  const sweep = clamp(p / 0.62);
-  const ringIn = clamp((p - 0.25) / 0.35);
-  const lineIn = clamp((p - 0.45) / 0.35);
-  const wordIn = clamp((p - 0.75) / 0.25);
 
-  // the recording, swept in like ink around the dial
-  if (strip && strip.bytes) {
-    const art = engravingFor(strip, !!options.sample);
-    if (sweep >= 1) {
-      ctx.drawImage(art, 0, 0);
-    } else {
-      ctx.save();
-      ctx.beginPath();
-      ctx.moveTo(cx, cy);
-      ctx.arc(cx, cy, 600, -Math.PI / 2, -Math.PI / 2 + sweep * Math.PI * 2);
-      ctx.closePath();
-      ctx.clip();
-      ctx.drawImage(art, 0, 0);
-      ctx.restore();
-    }
-  }
+  // 0-0.62 the stylus travels; the rest settles
+  const travel = clamp(p / 0.62);
+  const head = Math.round((strip ? strip.cols : 0) * easeInOutSine(travel));
+  const ringIn = clamp((p - 0.15) / 0.30);
+  const lineIn = clamp((p - 0.55) / 0.30);
+  const wordIn = clamp((p - 0.72) / 0.28);
 
-  // faint concentric rules
+  // rules, drawn through the same radius map as everything else
   ctx.strokeStyle = pal.line;
-  for (let r = 140; r <= 520; r += 40) {
-    ctx.globalAlpha = ringIn * 0.5;
+  for (let r = 150; r <= 470; r += 40) {
+    ctx.globalAlpha = ringIn * 0.45;
     ctx.lineWidth = 1.2;
     ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
   }
@@ -1121,22 +1190,76 @@ function drawDial(canvas, strip, opts) {
     const mid = (a0 + a1) / 2;
     ctx.globalAlpha = ringIn * 0.42;
     ctx.fillStyle = pal.text;
-    ctx.font = `500 ${Math.round(15 * typeK)}px ui-monospace, SFMono-Regular, Menlo, monospace`;
+    ctx.font = `500 ${Math.round(14 * typeK)}px ui-monospace, SFMono-Regular, Menlo, monospace`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText(ZONE_WORDS[z], cx + Math.cos(mid) * (RING + 32),
-      cy + Math.sin(mid) * (RING + 32));
+    const label = ZONE_WORDS[z];
+    const w = ctx.measureText(label).width;
+    const lx = Math.max(w / 2 + 8, Math.min(W - w / 2 - 8,
+      cx + Math.cos(mid) * (RING + 28)));
+    ctx.fillText(label, lx, cy + Math.sin(mid) * (RING + 28));
   }
 
-  // the line that carries the verdict, drawn on as the sweep passes it
+  // the engraving, revealed by the stylus rather than a wedge
+  if (strip && strip.bytes) {
+    const art = engravingFor(strip, !!options.sample);
+    if (travel >= 1) {
+      ctx.drawImage(art, 0, 0);
+    } else {
+      ctx.save();
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.arc(cx, cy, 600, -Math.PI / 2,
+        -Math.PI / 2 + easeInOutSine(travel) * Math.PI * 2);
+      ctx.closePath();
+      ctx.clip();
+      ctx.drawImage(art, 0, 0);
+      ctx.restore();
+    }
+    // the head: a hot hair and a cooling trail, the one thing you cannot miss
+    if (travel < 1 && head > 0) {
+      const plane = planeFor(strip);
+      const cols = plane.cols;
+      for (let k = 0; k < 20; k += 1) {
+        const n = head - k;
+        if (n < 0) break;
+        const hair = hairOf(plane, n);
+        const theta = (n / cols) * Math.PI * 2 - Math.PI / 2;
+        const cos = Math.cos(theta), sin = Math.sin(theta);
+        const heat = Math.pow(1 - k / 20, 2);
+        ctx.globalAlpha = Math.min(1, 0.16 + heat * 0.84);
+        ctx.strokeStyle = pal.text;
+        ctx.lineWidth = 1.5 + heat * 2.4;
+        ctx.beginPath();
+        ctx.moveTo(cx + cos * hair.inner, cy + sin * hair.inner);
+        ctx.lineTo(cx + cos * hair.outer, cy + sin * hair.outer);
+        ctx.stroke();
+      }
+      // the stylus itself, at the tip of the line it is drawing
+      const tip = hairOf(plane, Math.min(cols - 1, head));
+      const theta = (Math.min(cols - 1, head) / cols) * Math.PI * 2 - Math.PI / 2;
+      const hx = cx + Math.cos(theta) * tip.r, hy = cy + Math.sin(theta) * tip.r;
+      ctx.globalAlpha = 0.9;
+      ctx.beginPath(); ctx.arc(hx, hy, 16, 0, Math.PI * 2);
+      ctx.fillStyle = pal[zoneToken(status).slice(2)] || pal.grey;
+      ctx.globalAlpha = 0.18;
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      ctx.beginPath(); ctx.arc(hx, hy, 6.5, 0, Math.PI * 2);
+      ctx.fillStyle = pal.text; ctx.fill();
+    }
+  }
+
+  // the line that carries the verdict
+  const planeOf = strip && strip.bytes ? planeFor(strip) : null;
   if (strip && strip.mdf && strip.mdf.length) {
-    const upto = Math.round((strip.mdf.length - 1) * sweep);
+    const upto = Math.round((strip.mdf.length - 1) * clamp(travel * 1.05));
     ctx.beginPath();
     let started = false;
     for (let n = 0; n <= upto; n += 1) {
       const f = strip.mdf[n];
-      if (!f) continue;
+      if (!f) { started = false; continue; }
       const theta = (n / strip.cols) * Math.PI * 2 - Math.PI / 2;
-      const r = ART_STEP((f - 1) / 34, ART_IN, ART_IN + ART_SPAN);
+      const r = ART(planeOf ? planeOf.tOf(f) : (f - 1) / 34);
       const x = cx + Math.cos(theta) * r, y = cy + Math.sin(theta) * r;
       if (!started) { ctx.moveTo(x, y); started = true; } else { ctx.lineTo(x, y); }
     }
@@ -1147,7 +1270,7 @@ function drawDial(canvas, strip, opts) {
     ctx.stroke();
   }
 
-  // the reading: a needle at how spent the muscle is, not a progress bar
+  // the needle: how spent the muscle is, not how far through a task
   if (!options.sample && status !== 'grey' && wordIn > 0) {
     const score = Math.max(0, Math.min(100, options.score || 0));
     let lo = 0.02, hi = 0.28, frac = (100 - score) / 30;
@@ -1165,46 +1288,51 @@ function drawDial(canvas, strip, opts) {
 
   if (wordIn <= 0) { ctx.globalAlpha = 1; return; }
 
-  // centre: subject, verdict, age
+  // centre: subject, verdict, age -- the word sits in the empty core
   ctx.globalAlpha = wordIn;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.fillStyle = pal.text3;
   ctx.font = `500 ${Math.round(24 * typeK)}px ui-monospace, SFMono-Regular, Menlo, monospace`;
   ctx.fillText((options.subject || '').toUpperCase(), cx, cy - 78 * typeK);
 
-  const label = options.word || '';
+  const word = options.word || '';
   ctx.fillStyle = pal.text;
   let size = 96;
   const face = '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
   ctx.font = `300 ${size}px ${face}`;
-  while (size > 22 && ctx.measureText(label).width > 420) {
+  while (size > 22 && ctx.measureText(word).width > 420) {
     size *= 0.92;
     ctx.font = `300 ${size}px ${face}`;
   }
-  ctx.fillText(label, cx, cy + 8);
+  ctx.fillText(word, cx, cy + 8);
 
   ctx.fillStyle = pal.text3;
   ctx.font = `400 ${Math.round(21 * typeK)}px ui-monospace, SFMono-Regular, Menlo, monospace`;
   ctx.fillText(options.foot || '', cx, cy + 78 * typeK);
   ctx.globalAlpha = 1;
 
-  // the reference's one interaction: the hair under the pointer ignites
-  if (dialHover >= 0 && strip && strip.bytes && canvas === $('#home-disc')) {
-    const { cols, rows, bytes } = strip;
-    const { f, power } = dominating(bytes, cols, rows);
-    const n = Math.min(cols - 1, dialHover);
-    const theta = (n / cols) * Math.PI * 2 - Math.PI / 2;
-    const r = ART_STEP(f[n], ART_IN, ART_IN + ART_SPAN);
-    const len = 66 + power[n] * 120;
-    const inner = r - len * 0.45, outer = r + len * 0.55;
+  // the reference's interaction: the hair under the pointer ignites
+  if (dialHover >= 0 && strip && strip.bytes) {
+    const plane = planeFor(strip);
+    const n = Math.min(plane.cols - 1, dialHover);
+    const hair = hairOf(plane, n);
+    const theta = (n / plane.cols) * Math.PI * 2 - Math.PI / 2;
     const cos = Math.cos(theta), sin = Math.sin(theta);
+    for (const [offset, weight, width] of [[0, 1, 3], [-1, 0.4, 2.2], [1, 0.4, 2.2],
+                                           [-2, 0.15, 1.8], [2, 0.15, 1.8]]) {
+      const j = n + offset;
+      if (j < 0 || j >= plane.cols) continue;
+      const h = hairOf(plane, j);
+      const th = (j / plane.cols) * Math.PI * 2 - Math.PI / 2;
+      ctx.globalAlpha = weight;
+      ctx.strokeStyle = pal.text;
+      ctx.lineWidth = width;
+      ctx.beginPath();
+      ctx.moveTo(cx + Math.cos(th) * h.inner, cy + Math.sin(th) * h.inner);
+      ctx.lineTo(cx + Math.cos(th) * h.outer, cy + Math.sin(th) * h.outer);
+      ctx.stroke();
+    }
     ctx.globalAlpha = 1;
-    ctx.strokeStyle = pal.text;
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.moveTo(cx + cos * inner, cy + sin * inner);
-    ctx.lineTo(cx + cos * outer, cy + sin * outer);
-    ctx.stroke();
   }
 }
 
@@ -1442,6 +1570,14 @@ function paintHome(model) {
       : seconds && showVerdict ? `${seconds} S HOLD`
         : mode === 'last' ? (savedWhen || '').toUpperCase() : '',
   }, dialKey);
+
+  const replay = $('#home-replay');
+  if (replay) {
+    replay.textContent = reduced ? 'Motion off · play once' : '↻ replay';
+    replay.setAttribute('aria-label', reduced
+      ? 'Animations are off in your system settings. Play the entrance once.'
+      : 'Replay the dial animation');
+  }
 
   const disc = $('#home-disc');
   disc.setAttribute('aria-label', showVerdict
@@ -2029,6 +2165,11 @@ function wire() {
 
   $('#home-start').addEventListener('click', () => nav('check'));
   $('#home-start-m').addEventListener('click', () => nav('check'));
+  $('#home-replay').addEventListener('click', () => {
+    dialPlayed = '';
+    dialNonce += 1;
+    renderHome();
+  });
 
   // The reference's one interaction: the hair under the pointer ignites.
   const disc = $('#home-disc');
