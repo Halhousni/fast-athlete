@@ -126,7 +126,7 @@ function toggleTheme() {
 }
 
 // ── navigation ──────────────────────────────────────────────────────────────
-const SCREENS = ['home', 'check', 'train', 'history', 'profile'];
+const SCREENS = ['home', 'check', 'train', 'profile'];
 
 function nav(screen, opts) {
   const options = opts || {};
@@ -165,8 +165,7 @@ function nav(screen, opts) {
 
   if (screen === 'home') renderHome();
   if (screen === 'train') renderTrain();
-  if (screen === 'history') loadHistory();
-  if (screen === 'profile') renderProfile();
+  if (screen === 'profile') renderProfile();   // paints the record and the account
 
   // take the reader to the heading, so the page announces where it went
   if (!options.silent) {
@@ -436,7 +435,7 @@ function renderResults() {
   const actions = el('div', { class: 'btn-row mt-16' });
   actions.append(el('button', { class: 'btn btn--quiet', type: 'button', onclick: startOver }, 'New check'));
   if (state.profile) {
-    actions.append(el('button', { class: 'btn btn--quiet', type: 'button', onclick: () => nav('history') }, 'History'));
+    actions.append(el('button', { class: 'btn btn--quiet', type: 'button', onclick: () => nav('profile') }, 'Your record'));
   }
   box.append(actions);
 
@@ -1784,7 +1783,7 @@ async function renderTrain() {
   box.append(actions);
 
   if (state.profile) {
-    box.append(el('button', { class: 'btn--text mt-12', type: 'button', onclick: () => nav('history') }, 'See every check'));
+    box.append(el('button', { class: 'btn--text mt-12', type: 'button', onclick: () => nav('profile') }, 'See every check'));
   } else {
     box.append(el('div', { class: 'notice mt-16' }, ICON.info(),
       el('span', null, 'This call comes from the check you just did and is not saved. ',
@@ -1836,16 +1835,12 @@ function weekStrip(history) {
 // ── history ─────────────────────────────────────────────────────────────────
 async function loadHistory() {
   const box = clear($('#history-body'));
-  if (!state.profile) {
-    box.append(el('div', { class: 'card empty' }, ICON.empty(),
-      el('div', { text: 'Choose a profile to see saved checks.' }),
-      el('button', { class: 'btn btn--quiet mt-12', type: 'button', onclick: () => nav('profile') }, 'Choose profile')));
-    return;
-  }
-  box.append(el('div', { class: 'card' }, el('p', { class: 'meta', text: 'Loading…' })));
+  if (!state.profile) return;
+  box.append(el('div', { class: 'card' }, el('p', { class: 'meta', text: 'Loading your record…' })));
   try {
     const data = await api('/history');
     state.history = data.history || [];
+    state.historyAt = Date.now();
     renderHistory();
   } catch (error) {
     clear(box).append(el('div', { class: 'card empty', text: error.message }));
@@ -1854,10 +1849,12 @@ async function loadHistory() {
 
 function renderHistory() {
   const box = clear($('#history-body'));
+  if (!state.profile) return;
   const rows = state.history;
   if (!rows.length) {
     box.append(el('div', { class: 'card empty' }, ICON.empty(),
-      el('p', { text: 'No checks saved yet for ' + state.profile.name + '.' })));
+      el('p', { text: 'Nothing saved yet. Run a check, then save it.' }),
+      el('button', { class: 'btn btn--quiet mt-12', type: 'button', onclick: () => nav('check') }, 'Start a check')));
     return;
   }
   const scored = rows.filter((r) => r.avg_score !== null && r.avg_score !== undefined);
@@ -1937,138 +1934,139 @@ function openHistoryItem(item) {
   $('#sheet').hidden = false;
 }
 
-// ── profile ─────────────────────────────────────────────────────────────────
+// ── you: the record, then the account ───────────────────────────────────────
+
+let authMode = 'in';        // 'in' | 'up'
+
 async function renderProfile() {
-  const seq = (renderProfile.seq = (renderProfile.seq || 0) + 1);
   const box = clear($('#profile-body'));
+  const title = $('#profile-title');
+
   if (state.profile) {
-    box.append(el('div', { class: 'card' },
-      el('h2', { text: state.profile.name }),
-      el('p', { class: 'meta', text: 'Results are saved under this name.' }),
-      el('div', { class: 'btn-row mt-12' },
-        el('button', { class: 'btn btn--quiet', type: 'button', onclick: signOut }, 'Sign out'),
-        el('button', { class: 'btn btn--quiet', type: 'button', onclick: deleteMine }, 'Delete profile'))));
+    title.textContent = 'Your record';
+    box.append(accountCard());
+    loadHistory();
   } else {
-    box.append(el('div', { class: 'card' },
-      el('h2', { text: 'Not signed in' }),
-      el('p', { class: 'meta', text: 'Choose your name below, or add a new profile.' })));
+    title.textContent = 'Sign in';
+    clear($('#history-body'));
+    box.append(authCard());
   }
-
-  let profiles = [];
-  try {
-    const data = await api('/profiles');
-    if (seq !== renderProfile.seq) return;   // a newer render is in flight
-    profiles = data.profiles || [];
-  } catch (error) {
-    if (seq !== renderProfile.seq) return;
-    box.append(el('div', { class: 'card empty', text: error.message }));
-  }
-  if (profiles.length) {
-    const list = el('div', { class: 'card' }, el('h3', { text: 'Profiles on this server' }));
-    const choices = el('div', { class: 'choices' });
-    for (const profile of profiles) {
-      const active = state.profile && state.profile.id === profile.id;
-      choices.append(el('button', {
-        class: 'hist mb-0', type: 'button',
-        onclick: () => chooseProfile(profile),
-      }, el('span', { class: 'when' },
-        el('strong', { text: profile.name }),
-        el('span', { text: profile.has_pin ? 'PIN protected' : 'No PIN' })),
-        active ? el('span', { class: 'meta', text: 'Signed in' }) : null));
-    }
-    list.append(choices);
-    box.append(list);
-  }
-
-  if (!state.profile) {
-    box.append(el('div', { class: 'card' },
-      el('h3', { text: 'New profile' }),
-      el('label', { class: 'field mt-12' },
-        el('span', { text: 'Name' }),
-        el('input', { type: 'text', id: 'new-name', maxlength: '30', autocomplete: 'off' })),
-      el('label', { class: 'field' },
-        el('span', { text: 'PIN (optional, four digits)' }),
-        el('input', { type: 'password', id: 'new-pin', inputmode: 'numeric', maxlength: '4', autocomplete: 'off' })),
-      el('button', { class: 'btn btn--primary', type: 'button', onclick: createProfile }, 'Add profile')));
-  }
-
-  box.append(el('div', { class: 'card' },
-    el('h3', { text: 'About' }),
-    el('p', { class: 'meta mt-8', text: 'FAST Athlete reads surface EMG from one muscle at a time and says whether it is ready to train. Scores run from 0 to 100: 70 and above is ready, 40 to 69 is go easy, below 40 is rest. Checks you save are stored on this server.' }),
-    el('p', { class: 'meta mt-8', text: 'The method is a research prototype. It is not a diagnosis.' }),
-    el('p', { class: 'meta mt-12', id: 'version-line', text: '' })));
-
+  box.append(aboutCard());
   loadVersion();
 }
 
-async function chooseProfile(profile) {
-  if (!profile.has_pin) {
-    return signIn(profile.id, '');
-  }
-  const input = el('input', {
-    type: 'password', id: 'pin-entry', inputmode: 'numeric',
-    maxlength: '4', autocomplete: 'off',
-  });
-  const submit = () => {
-    const pin = input.value.trim();
-    if (!/^[0-9]{4}$/.test(pin)) {
-      input.focus();
-      return toast('A PIN is four digits');
+function accountCard() {
+  const name = state.profile.name;
+  return el('div', { class: 'card acct' },
+    el('div', { class: 'acct-head' },
+      el('span', { class: 'acct-mark', 'aria-hidden': 'true', text: name.slice(0, 1).toUpperCase() }),
+      el('div', null,
+        el('h2', { text: name }),
+        el('p', { class: 'meta', id: 'acct-since', text: 'Signed in on this device' }))),
+    el('div', { class: 'btn-row mt-16' },
+      el('button', { class: 'btn btn--quiet', type: 'button', onclick: signOut }, 'Sign out'),
+      el('button', { class: 'btn btn--quiet btn--danger-quiet', type: 'button', onclick: askDelete }, 'Delete account')));
+}
+
+function authCard() {
+  const card = el('div', { class: 'card auth' });
+  const seg = el('div', { class: 'seg', role: 'group', 'aria-label': 'Sign in or create an account' });
+  const form = el('form', { class: 'auth-form', novalidate: 'novalidate' });
+
+  const paint = () => {
+    const up = authMode === 'up';
+    clear(seg);
+    for (const [mode, label] of [['in', 'Sign in'], ['up', 'Create account']]) {
+      seg.append(el('button', {
+        type: 'button',
+        class: mode === authMode ? 'on' : '',
+        'aria-pressed': mode === authMode ? 'true' : 'false',
+        onclick: () => { authMode = mode; paint(); },
+      }, label));
     }
-    $('#sheet').hidden = true;
-    signIn(profile.id, pin);
+
+    clear(form);
+    const error = el('p', { class: 'form-error', role: 'alert', hidden: 'hidden' });
+    const username = el('input', {
+      id: 'auth-username', name: 'username', type: 'text', required: 'required',
+      autocomplete: 'username', autocapitalize: 'none', autocorrect: 'off',
+      spellcheck: 'false', maxlength: '20',
+    });
+    const password = el('input', {
+      id: 'auth-password', name: 'password', type: 'password', required: 'required',
+      autocomplete: up ? 'new-password' : 'current-password', maxlength: '128',
+    });
+    const confirm = up ? el('input', {
+      id: 'auth-confirm', name: 'confirm', type: 'password', required: 'required',
+      autocomplete: 'new-password', maxlength: '128',
+    }) : null;
+
+    form.append(...[
+      el('label', { class: 'field' }, el('span', { text: 'Username' }), username),
+      el('label', { class: 'field' }, el('span', { text: 'Password' }), password),
+      confirm ? el('label', { class: 'field' }, el('span', { text: 'Confirm password' }), confirm) : null,
+      up ? el('p', { class: 'hint', text: 'Ten characters or more. Three unrelated words are easier to remember than a symbol you will forget.' }) : null,
+      error,
+      el('button', { class: 'btn btn--primary mt-8', type: 'submit', text: up ? 'Create account' : 'Sign in' }),
+    ].filter(Boolean));
+
+    const showError = (message) => {
+      error.textContent = message;
+      error.hidden = false;
+    };
+
+    form.onsubmit = async (event) => {
+      event.preventDefault();
+      error.hidden = true;
+      const name = username.value.trim().toLowerCase();
+      const pass = password.value;
+      if (!name) { showError('Enter a username'); username.focus(); return; }
+      if (!pass) { showError('Enter a password'); password.focus(); return; }
+      if (up) {
+        if (pass.length < 10) { showError('Use at least 10 characters'); password.focus(); return; }
+        if (pass !== confirm.value) { showError('The two passwords do not match'); confirm.focus(); return; }
+      }
+      const submit = form.querySelector('button[type=submit]');
+      submit.disabled = true;
+      submit.textContent = up ? 'Creating…' : 'Signing in…';
+      try {
+        const data = await api(up ? '/auth/signup' : '/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username: name, password: pass }),
+        });
+        signedIn(data);
+      } catch (err) {
+        showError(err.message);
+        submit.disabled = false;
+        submit.textContent = up ? 'Create account' : 'Sign in';
+      }
+    };
+
+    // Changing mode keeps what has been typed so far.
+    if (username.value) form.querySelector('.field input')?.focus();
   };
-  input.addEventListener('keydown', (event) => { if (event.key === 'Enter') submit(); });
 
-  const body = clear($('#sheet-body'));
-  $('#sheet-title').textContent = profile.name;
-  body.append(
-    el('p', { class: 'meta', text: 'This profile is protected by a four-digit PIN.' }),
-    el('label', { class: 'field mt-12' }, el('span', { text: 'PIN' }), input),
-    el('div', { class: 'btn-row' },
-      el('button', { class: 'btn btn--quiet', type: 'button', onclick: () => { $('#sheet').hidden = true; } }, 'Cancel'),
-      el('button', { class: 'btn btn--primary', type: 'button', onclick: submit }, 'Sign in')));
-  $('#sheet').hidden = false;
-  input.focus();
+  card.append(seg, form);
+  paint();
+  return card;
 }
 
-async function signIn(id, pin) {
-  try {
-    const data = await api('/profiles/verify', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id, pin }),
-    });
-    state.profile = { id: data.id, name: data.name };
-    state.history = []; state.historyAt = 0;
-    state.analysis = null; state.checkedAt = null;
-    toast(`Signed in as ${data.name}`);
-    renderProfile();
-    if (state.screen === 'home') renderHome();
-  } catch (error) {
-    toast(error.message);
-  }
+function aboutCard() {
+  return el('div', { class: 'card' },
+    el('h3', { text: 'About FAST Athlete' }),
+    el('p', { class: 'meta mt-8', text: 'FAST Athlete reads surface EMG from one muscle at a time and says whether it is ready to train. Scores run from 0 to 100: 70 and above is ready, 40 to 69 is go easy, below 40 is rest. Checks you save are stored on this server, in your account.' }),
+    el('p', { class: 'meta mt-8', text: 'The method is a research prototype. It is not a diagnosis.' }),
+    el('p', { class: 'meta mt-12', id: 'version-line', text: '' }));
 }
 
-async function createProfile() {
-  const name = $('#new-name').value.trim();
-  const pin = $('#new-pin').value.trim();
-  if (!name) return toast('Enter a name first');
-  const button = document.querySelector('#profile-body .btn--primary');
-  if (button && button.disabled) return;
-  if (button) button.disabled = true;
-  try {
-    const created = await api('/profiles', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, pin: pin || null }),
-    });
-    await signIn(created.id, pin);
-  } catch (error) {
-    toast(error.message);
-  } finally {
-    if (button) button.disabled = false;
-  }
+function signedIn(data) {
+  state.profile = { id: data.id, name: data.name };
+  state.history = []; state.historyAt = 0;
+  state.analysis = null; state.checkedAt = null;
+  toast(`Signed in as ${data.name}`);
+  renderProfile();
+  if (state.screen === 'home') renderHome();
 }
 
 function resetUserState() {
@@ -2083,28 +2081,55 @@ function resetUserState() {
   homeSeq += 1;
   if (state.screen === 'home') renderHome();
   clear($('#home-last'));
+  clear($('#history-body'));
   clear($('#train-body'));
   setStage('idle');
 }
 
 async function signOut() {
-  try { await api('/profiles/logout', { method: 'POST' }); } catch (e) { /* ignore */ }
+  try { await api('/auth/logout', { method: 'POST' }); } catch (e) { /* ignore */ }
   resetUserState();
   toast('Signed out');
+  authMode = 'in';
   renderProfile();
 }
 
-async function deleteMine() {
-  if (!state.profile) return;
-  if (!window.confirm(`Delete ${state.profile.name} and every saved result?`)) return;
-  try {
-    await api(`/profiles/${state.profile.id}`, { method: 'DELETE' });
-    resetUserState();
-    toast('Profile deleted');
-    renderProfile();
-  } catch (error) {
-    toast(error.message);
-  }
+function askDelete() {
+  const input = el('input', { type: 'password', id: 'delete-password', autocomplete: 'current-password', maxlength: '128' });
+  const error = el('p', { class: 'form-error', role: 'alert', hidden: 'hidden' });
+  const submit = el('button', { class: 'btn btn--primary', type: 'button' }, 'Delete everything');
+  submit.onclick = async () => {
+    if (!input.value) { input.focus(); return; }
+    submit.disabled = true;
+    try {
+      await api('/auth/account', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: input.value }),
+      });
+      $('#sheet').hidden = true;
+      resetUserState();
+      authMode = 'up';
+      toast('Account deleted');
+      renderProfile();
+    } catch (err) {
+      error.textContent = err.message;
+      error.hidden = false;
+      submit.disabled = false;
+    }
+  };
+
+  const body = clear($('#sheet-body'));
+  $('#sheet-title').textContent = 'Delete this account?';
+  body.append(
+    el('p', { class: 'meta', text: `Every saved check goes with it. This cannot be undone.` }),
+    el('label', { class: 'field mt-12' }, el('span', { text: 'Password' }), input),
+    error,
+    el('div', { class: 'btn-row' },
+      el('button', { class: 'btn btn--quiet', type: 'button', onclick: () => { $('#sheet').hidden = true; } }, 'Keep my account'),
+      submit));
+  $('#sheet').hidden = false;
+  input.focus();
 }
 
 // ── home ────────────────────────────────────────────────────────────────────
@@ -2123,7 +2148,7 @@ async function renderHomeLast() {
         `${formatDate(last.ts)} · `,
         el('span', { class: `status--${last.status}`, text: WORDS[last.status] || 'No reading' }),
         last.avg_score !== null ? ` · ${Math.round(last.avg_score)}` : ''),
-      el('button', { class: 'btn--text mt-8', type: 'button', onclick: () => nav('history') }, 'See history')));
+      el('button', { class: 'btn--text mt-8', type: 'button', onclick: () => nav('profile') }, 'See your record')));
   } catch (e) { /* not signed in */ }
 }
 
@@ -2267,7 +2292,7 @@ wire();
 nav(screenFromHash(), { silent: true, replace: true });
 // The cookie outlives a reload, so the server is asked who it belongs to;
 // otherwise a shared device looks signed out while the session is still live.
-api('/profiles/me')
+api('/auth/me')
   .then((me) => { state.profile = { id: me.id, name: me.name }; })
   .catch(() => { /* not signed in */ })
   .finally(() => {

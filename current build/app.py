@@ -8,8 +8,8 @@ Every route called by the page is listed here. Nothing else calls them.
 """
 from __future__ import annotations
 
-import hmac
 import os
+import re
 import threading
 import time
 from pathlib import Path
@@ -24,8 +24,9 @@ from pydantic import BaseModel, Field
 import engine
 import ingest
 import version
-from store import (SessionStore, Store, StoreError, legacy_pin_hash,
-                   verify_pin)
+from store import (PASSWORD_MAX, PASSWORD_MIN, SessionStore, Store,
+                   StoreError, TOKEN_TTL_S, burn_password_check,
+                   verify_password)
 
 BASE = Path(__file__).resolve().parent
 DATA_DIR = os.environ.get('FAST_DATA_DIR', '/data')
@@ -46,16 +47,6 @@ ingest_slots = threading.BoundedSemaphore(1)
 
 
 # ── models ───────────────────────────────────────────────────────────────────
-
-class ProfileIn(BaseModel):
-    name: str = Field(min_length=1, max_length=30)
-    pin: str | None = Field(default=None, max_length=8)
-
-
-class VerifyIn(BaseModel):
-    id: int
-    pin: str = Field(default='', max_length=8)
-
 
 class MuscleIn(BaseModel):
     id: str = Field(max_length=64)
@@ -81,6 +72,20 @@ class ResultIn(BaseModel):
     delta_rms: float | None = None
 
 
+class SignupIn(BaseModel):
+    username: str = Field(min_length=3, max_length=40)
+    password: str = Field(min_length=1, max_length=PASSWORD_MAX)
+
+
+class LoginIn(BaseModel):
+    username: str = Field(max_length=40)
+    password: str = Field(max_length=128)
+
+
+class DeleteIn(BaseModel):
+    password: str = Field(max_length=128)
+
+
 class SaveIn(BaseModel):
     profile_id: int
     filename: str = Field(default='', max_length=200)
@@ -100,17 +105,8 @@ def _profile_id(request: Request) -> int | None:
 def _require_profile(request: Request) -> tuple[int | None, JSONResponse | None]:
     pid = _profile_id(request)
     if pid is None:
-        return None, _json({'error': 'Choose your profile and enter its PIN first'},
-                           status=401)
+        return None, _json({'error': 'Sign in to do that'}, status=401)
     return pid, None
-
-
-def _valid_pin(pin: str) -> bool:
-    return bool(pin) and len(pin) == 4 and pin.isascii() and pin.isdigit()
-
-
-def _valid_name(name: str) -> bool:
-    return 1 <= len(name) <= 30 and all(ch.isprintable() for ch in name)
 
 
 # ── pages and assets ─────────────────────────────────────────────────────────
@@ -267,81 +263,108 @@ def analyze(body: AnalyzeIn):
             'seconds': round(time.time() - started, 2)}
 
 
-# ── profiles ─────────────────────────────────────────────────────────────────
+# ── accounts ─────────────────────────────────────────────────────────────────
 
-@app.get('/profiles')
-async def list_profiles():
-    return {'profiles': store.list_profiles()}
-
-
-@app.get('/profiles/me')
-async def whoami(request: Request):
-    pid = _profile_id(request)
-    if pid is None:
-        return _json({'error': 'Not signed in'}, status=401)
-    row = store.profile(pid)
-    if not row:
-        return _json({'error': 'Not signed in'}, status=401)
-    return {'id': row['id'], 'name': row['name']}
+USERNAME_RE = re.compile(r'^[a-z0-9][a-z0-9_.-]{2,19}$')
+# Ten is the floor that stops the obvious guesses without making an athlete
+# invent a symbol. A short blocklist covers the rest of the first hundred.
+WEAK_PASSWORDS = {
+    '1234567890', 'qwertyuiop', 'password12', 'password123', 'iloveyou12',
+    'football12', 'baseball12', 'sunshine12', 'princess12', 'letmein123',
+    'fastathlete', 'athlete123', 'musclestrong',
+}
 
 
-# These two routes are plain `def` on purpose: scrypt takes about 50 ms and
-# would block every other request if it ran on the event loop.
-@app.post('/profiles')
-def create_profile(body: ProfileIn):
-    name = body.name.strip()
-    if not _valid_name(name):
-        return _json({'error': 'Use a name of up to 30 characters'}, status=400)
-    pin = (body.pin or '').strip() or None
-    if pin and not _valid_pin(pin):
-        return _json({'error': 'The PIN must be four digits'}, status=400)
-    if store.profile_by_name(name):
-        return _json({'error': 'That name is already taken'}, status=409)
-    try:
-        created = store.create_profile(name, pin)
-    except StoreError as exc:
-        return _json({'error': str(exc)}, status=409)
-    return created
+def _username(raw: str) -> str:
+    return (raw or '').strip().lower()
 
 
-@app.post('/profiles/verify')
-def verify_profile(body: VerifyIn, request: Request):
-    row = store.profile(body.id)
-    if not row:
-        return _json({'error': 'Profile not found'}, status=404)
-    # Keyed by client as well as profile, so one person guessing cannot lock the
-    # owner out of their own profile.
-    key = f'{body.id}:{request.client.host if request.client else "?"}'
-    if store.attempts.blocked(key):
-        return _json({'error': 'Too many wrong PINs. Wait fifteen minutes.'},
-                     status=429)
-    if row['pin_hash']:
-        pin = (body.pin or '').strip()
-        if not _valid_pin(pin):
-            store.attempts.record(key)
-            return _json({'error': 'Wrong PIN'}, status=403)
-        if row['pin_salt']:
-            ok = verify_pin(pin, row['pin_hash'], row['pin_salt'])
-        else:
-            # A profile created by the previous build: unsalted sha256. Accept
-            # it once, then store the salted hash instead.
-            ok = hmac.compare_digest(legacy_pin_hash(pin), row['pin_hash'])
-            if ok:
-                store.upgrade_pin(row['id'], pin)
-        if not ok:
-            store.attempts.record(key)
-            return _json({'error': 'Wrong PIN'}, status=403)
-    store.attempts.clear(key)
-    token = store.issue_token(body.id)
-    response = _json({'id': row['id'], 'name': row['name']})
-    secure = (request.url.scheme == 'https'
-              or request.headers.get('x-forwarded-proto') == 'https')
-    response.set_cookie(COOKIE, token, max_age=3600, httponly=True,
+def _password_problem(username: str, password: str) -> str | None:
+    if len(password) < PASSWORD_MIN:
+        return f'Use at least {PASSWORD_MIN} characters'
+    if len(password) > PASSWORD_MAX:
+        return f'That is longer than {PASSWORD_MAX} characters'
+    if password.lower() == username:
+        return 'The password cannot be your username'
+    if password.lower() in WEAK_PASSWORDS:
+        return 'That password is too common. Pick another.'
+    return None
+
+
+def _client(request: Request) -> str:
+    return request.client.host if request.client else '?'
+
+
+COOKIE_SECURE = os.environ.get('FAST_COOKIE_SECURE', '').strip() == '1'
+
+
+def _sign_in_response(request: Request, account) -> JSONResponse:
+    token = store.issue_token(account['id'])
+    response = _json({'id': account['id'], 'name': account['name']})
+    # Behind the proxy the app can see plain http even when the browser did not,
+    # so production sets this explicitly rather than trusting the scheme.
+    secure = COOKIE_SECURE or (request.url.scheme == 'https'
+                               or request.headers.get('x-forwarded-proto') == 'https')
+    response.set_cookie(COOKIE, token, max_age=TOKEN_TTL_S, httponly=True,
                         samesite='lax', path='/', secure=secure)
     return response
 
 
-@app.post('/profiles/logout')
+# These take plain `def` on purpose: scrypt is about 50 ms of CPU and would
+# block every other request if it ran on the event loop.
+@app.post('/auth/signup')
+def signup(body: SignupIn, request: Request):
+    username = _username(body.username)
+    if not USERNAME_RE.match(username):
+        return _json({'error': 'Usernames are 3 to 20 characters: letters, '
+                               'numbers, dot, dash, underscore'}, status=400)
+    problem = _password_problem(username, body.password)
+    if problem:
+        return _json({'error': problem}, status=400)
+
+    key = f'signup:{_client(request)}'
+    if store.attempts.blocked(key):
+        return _json({'error': 'Too many attempts. Wait fifteen minutes.'}, status=429)
+    store.attempts.record(key)
+
+    try:
+        created = store.create_account(username, body.password)
+    except StoreError as exc:
+        return _json({'error': str(exc)}, status=409)
+    account = store.account(created['id'])
+    return _sign_in_response(request, account)
+
+
+@app.post('/auth/login')
+def login(body: LoginIn, request: Request):
+    username = _username(body.username)
+    # Keyed by the pair, so one person guessing cannot lock the owner out from
+    # another machine, and one machine cannot walk the whole user list.
+    key = f'login:{username}:{_client(request)}'
+    # Behind the proxy every request can look like it comes from the proxy, so
+    # the pair alone would let one attacker lock an account for everyone else.
+    # The name gets its own, looser cap; the pair stays tight.
+    name_key = f'login-name:{username}'
+    if store.attempts.blocked(key) or store.attempts.count(name_key) >= 12:
+        return _json({'error': 'Too many attempts. Wait fifteen minutes.'}, status=429)
+
+    row = store.account_by_username(username) if username else None
+    store.attempts.record(name_key)
+    if not row or not row['password_hash']:
+        burn_password_check()          # same time as a real check
+        store.attempts.record(key)
+        # A stranger learns nothing about which half was wrong.
+        return _json({'error': 'Wrong username or password'}, status=401)
+    if not verify_password(body.password, row['password_hash']):
+        store.attempts.record(key)
+        return _json({'error': 'Wrong username or password'}, status=401)
+
+    store.attempts.clear(key)
+    store.attempts.clear(name_key)
+    return _sign_in_response(request, row)
+
+
+@app.post('/auth/logout')
 async def logout(request: Request):
     store.revoke_token(request.cookies.get(COOKIE))
     response = _json({'ok': True})
@@ -349,16 +372,31 @@ async def logout(request: Request):
     return response
 
 
-@app.delete('/profiles/{profile_id}')
-async def delete_profile(profile_id: int, request: Request):
-    own, error = _require_profile(request)
-    if error:
-        return error
-    if own != profile_id:
-        return _json({'error': 'You can only delete the profile you are signed in to'},
-                     status=403)
-    if not store.delete_profile(profile_id):
-        return _json({'error': 'Profile not found'}, status=404)
+@app.get('/auth/me')
+async def me(request: Request):
+    pid = _profile_id(request)
+    if pid is None:
+        return _json({'error': 'Not signed in'}, status=401)
+    row = store.account(pid)
+    if not row:
+        return _json({'error': 'Not signed in'}, status=401)
+    return {'id': row['id'], 'name': row['name'], 'created_at': row['created_at']}
+
+
+@app.delete('/auth/account')
+def delete_account(body: DeleteIn, request: Request):
+    """Deleting an account asks for the password again, then takes the results
+    and every session with it."""
+    pid = _profile_id(request)
+    if pid is None:
+        return _json({'error': 'Not signed in'}, status=401)
+    row = store.account(pid)
+    if not row:
+        return _json({'error': 'Not signed in'}, status=401)
+    if not verify_password(body.password, row['password_hash']):
+        return _json({'error': 'Wrong password'}, status=403)
+    if not store.delete_account(pid):
+        return _json({'error': 'Account not found'}, status=404)
     response = _json({'ok': True})
     response.delete_cookie(COOKIE, path='/')
     return response
@@ -429,7 +467,17 @@ async def body_limit(request: Request, call_next):
 
 @app.middleware('http')
 async def security_headers(request: Request, call_next):
+    # A request that changes something must come from a page on this host. The
+    # endpoints take JSON, which a cross-site form cannot send, so this is a
+    # second lock on the same door rather than the only one.
+    if request.method in ('POST', 'PUT', 'PATCH', 'DELETE'):
+        origin = request.headers.get('origin')
+        if origin and origin != 'null' and origin.split('://')[-1] != request.headers.get('host', ''):
+            return _json({'error': 'Cross-origin request refused'}, status=403)
+
     response = await call_next(request)
+    if request.url.path.startswith(('/auth', '/history', '/save')):
+        response.headers['Cache-Control'] = 'no-store'
     response.headers['Content-Security-Policy'] = (
         "default-src 'self'; img-src 'self' data:; media-src 'self'; "
         "style-src 'self'; script-src 'self'; connect-src 'self'; "
