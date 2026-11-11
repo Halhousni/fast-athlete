@@ -1,36 +1,30 @@
 # Third-party notices
 
+FAST Athlete is MIT licensed. It uses the following.
+
 ## MuscleMapJS
 
-`current build/static/vendor/musclemap.min.js`
+`app/static/vendor/musclemap.min.js`
 
-MIT. https://github.com/abdofallah/MuscleMapJS — a port of the MuscleMap SwiftUI
-SDK by Melih Colpan.
+MIT. <https://github.com/abdofallah/MuscleMapJS>, a port of the MuscleMap
+SwiftUI SDK by Melih Colpan.
 
 Bundled unmodified except for one added method, `highlightSide(muscle, side,
-colour, opacity)`, which tints one side of the body so a single leg can be shown.
-The bundle is served as a static file and used as-is.
+colour, opacity)`, which tints one side of the body so a single leg can be
+highlighted. The bundle is served as a static file and used as-is.
 
 ## wsstpy
 
-`pip` dependency, pinned in `requirements.txt`.
+A pip dependency, pinned in `app/requirements.txt`.
 
-MIT. https://github.com/Halhousni/wsstpy — wavelet synchrosqueezing in NumPy with
-the same numbers as MATLAB's Wavelet Toolbox. The transform FAST computes is
-`wsstpy.wsst`; the version in use is reported by `/healthz`.
+MIT. <https://github.com/Halhousni/wsstpy>. Wavelet synchrosqueezing in NumPy and
+SciPy that reproduces MATLAB's `wsst`. The version in use is reported by
+`/healthz` and stored with every result.
 
-## Algorithm
+## The method
 
-Daubechies, Lu and Wu, *Appl. Comput. Harmon. Anal.* 30(2), 2011. Thakur, Brevdo,
-Fuckar and Wu, *Signal Processing* 93(5), 2013.
+Daubechies, Lu and Wu, *Applied and Computational Harmonic Analysis* 30(2), 2011.
+Thakur, Brevdo, Fuckar and Wu, *Signal Processing* 93(5), 2013.
 
-The LOW 8–23 Hz centroid follows "FAST LOW 8–23 Hz Centroid Calculation" (Bowen,
-22 July 2026); `bowen_centroid.py` records where it may differ from the MATLAB
-implementation.
-
-## Removed in this build
-
-Earlier builds loaded Inter from Google Fonts and drew the notification bell from
-Font Awesome. Both are gone: the interface uses the system font stack and the
-icons are drawn in the page, so there is no third-party request at load time and
-no external IP is disclosed to a font or icon CDN.
+Zhao, Charoonsrisawad, Ichiyama and Chakrabarty, 2025, for the fatigue measure
+itself: the change in median frequency and in RMS across a hold.

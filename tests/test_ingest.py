@@ -8,7 +8,7 @@ import pandas as pd
 import pytest
 import scipy.io
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'current build'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'app'))
 
 import ingest  # noqa: E402
 

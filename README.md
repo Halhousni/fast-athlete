@@ -1,125 +1,141 @@
-# FAST
+# FAST Athlete
 
-Muscle fatigue from surface EMG. Upload a recording, pick the muscles, get a
-traffic light for each one and a call for today.
+Muscle fatigue from surface EMG. One recording, one muscle, one answer: ready,
+go easy, or rest, with the two numbers that produced it.
 
-FAST is a research prototype. It is not a diagnostic device, and the thresholds
-it uses are still being validated.
+![The home screen after a check](docs/screenshot.png)
 
-## How it measures
+FAST Athlete is a research prototype. The thresholds are provisional and it is
+not a diagnostic device.
 
-1. Each channel is resampled to 200 Hz with a polyphase filter. The rate comes
-   from the athlete, from a header line in the file, or from a time column. FAST
-   refuses to guess.
-2. One wavelet synchrosqueezed transform of the whole channel (`wsstpy`, analytic
-   Morlet, 32 voices per octave, signal extension on).
-3. Points whose power is below 0.9 times the mean power of the plane are zeroed,
-   which suppresses the noise floor.
-4. Per time frame, the power-weighted mean instantaneous frequency over 1–35 Hz.
-5. The median of the whole recording is compared with the median of the first
-   five seconds of the same contraction:
+A running copy is at <https://fast.ptrehab.icu>.
 
-   ```
-   NFI = (MIF_baseline - MIF_median) / MIF_baseline × 100
-   ```
+## What it does
 
-6. NFI becomes a score, and the score becomes the traffic light:
+You hold a contraction for thirty seconds while an EMG amplifier records. You
+upload the file and say which muscle each channel is. The app measures how the
+signal changed between the start of the hold and the end, and scores it.
 
-   | NFI | status | score |
-   |---|---|---|
-   | under 15 % | recovered | 70–100 |
-   | 15–35 % | some fatigue | 40–69 |
-   | over 35 % | needs rest | 0–39 |
+- **Ready** means neither measure moved far enough to call fatigue. Train as
+  planned.
+- **Go easy** means both moved a little. Fewer sets today.
+- **Rest** means both moved a lot. Leave the muscle unloaded and check again
+  tomorrow.
 
-   The overall verdict is the worst muscle, not the mean. A 30-second window is
-   analysed, and the screen says so when the recording is longer. A recording
-   under 15 seconds is not scored.
+The recommendation reads your saved checks as well as the recording, so a muscle
+that has read the same or worse for a few days gets told to rest longer. The
+wording never claims a trend it cannot see: two checks are two checks.
 
-`bowen_centroid.py` also reports the LOW 8–23 Hz centroid for each muscle. It is
-shown, but it does not drive the traffic light.
+## Quick start
 
-## Layout
-
-```
-app.py            HTTP routes, page, security headers
-engine.py         the method: resample, transform, classify, verdict
-ingest.py         file parsing: CSV, TXT, MAT, sampling rate, channel matching
-store.py          SQLite profiles and results, PIN hashing, session tokens
-version.py        what is running
-bowen_centroid.py LOW 8–23 Hz centroid
-templates/        index.html
-static/           app.css, app.js, theme.js, icon.svg, vendor/musclemap.min.js
-tests/            pytest: engine and ingest
-scripts/          compare_transform.py, the aggregate-vs-single evidence
-ENGINE-NOTES.md   why the method runs one transform, with the measurements
+```bash
+git clone https://github.com/Halhousni/fast-athlete
+cd fast-athlete
+docker compose -f app/docker-compose.yml up --build
 ```
 
-## Run locally
+Open <http://127.0.0.1:8501>. The bundled `app/demo_recording.csv` is a synthetic
+eight-channel recording with a known answer, so you can try the whole flow
+without an amplifier. Its sampling rate is 1000 Hz.
+
+Without Docker:
 
 ```bash
 python3 -m venv .venv
 . .venv/bin/activate
-pip install -r "current build/requirements.txt"
-pip install pytest
+pip install -r app/requirements.txt pytest
 
+cd app
 FAST_DATA_DIR=/tmp/fast-data python3 -m uvicorn app:app --port 8501
 ```
 
-with `cd "current build"` first, or set `PYTHONPATH`. Then open
-http://127.0.0.1:8501.
+## How it measures
 
-Tests:
+Each channel is resampled to 200 Hz, split into 34 overlapping bands, and each
+band gets its own synchrosqueezed transform. The band powers are summed onto one
+grid. Median frequency and RMS are then tracked through the recording, and the
+last five seconds are compared with the first five.
+
+Fatigue shows up as a fall in median frequency and a rise in RMS. Both count, so
+a frequency drop with no amplitude change is half the evidence and scores
+accordingly. The full method, including the thresholds and what they mean, is in
+[docs/method.md](docs/method.md).
+
+The method follows Zhao, Charoonsrisawad, Ichiyama and Chakrabarty (2025).
+
+## Accounts
+
+An account is a username and a password. Passwords are hashed with scrypt at
+n=2^15, with the cost and salt inside the stored string so it can be raised
+later. A session is a random token whose sha256 the database holds, so a copy of
+the database cannot be turned into working cookies. The cookie is HttpOnly,
+SameSite=Lax, thirty days, and Secure when `FAST_COOKIE_SECURE=1`.
+
+Five wrong attempts per account and address are throttled for fifteen minutes,
+and twelve per account name, because behind a proxy every request looks like the
+proxy and a single attacker could otherwise lock an athlete out. Sign-in gives
+the same answer and the same timing for a missing account and a wrong password.
+Nobody can list the accounts on a server. Deleting an account asks for the
+password again.
+
+There is no email on the server, so the reset path is the operator command. It
+prompts on the terminal, which keeps the password out of shell history:
+
+```bash
+docker compose exec signal-analyzer python3 store.py passwd <username>
+```
+
+## Running it
+
+`app/docker-compose.yml` builds one container, publishes it on loopback by
+default, and keeps the database on a volume.
+
+| variable | default | what it does |
+|---|---|---|
+| `FAST_BIND_IP` | `127.0.0.1` | address the container publishes on |
+| `FAST_COOKIE_SECURE` | `0` | set to 1 behind TLS |
+| `FAST_DATA_DIR` | `/data` | where `fast.db` lives |
+| `FAST_BUILD` | `local` | commit stamped into the image |
+| `FAST_FA_WORKERS` | `6` | threads for the band transforms |
+
+The port is bound to loopback on purpose. Docker's published ports bypass UFW,
+so binding every interface puts the app on the internet around whatever proxy
+terminates TLS.
+
+Uploads are held in memory and expire after thirty minutes; only a saved check
+is written to the database. One analysis takes about half a minute for eight
+channels, and the app runs two at a time.
+
+## Development
+
+```
+app/app.py            HTTP routes, page, security headers
+app/engine.py         the measurement
+app/ingest.py         CSV, TXT and MAT parsing, sampling rate, channel matching
+app/store.py          SQLite accounts, results, sessions
+app/version.py        what is running
+app/static/           app.css, app.js, theme.js, icon.svg, vendor/musclemap
+app/templates/        index.html
+docs/method.md        the measurement in full
+scripts/              regenerating the demo data and the spectrogram strip
+tests/                pytest
+```
 
 ```bash
 python3 -m pytest tests -q
 ```
 
-## Deploy
+The running version is at `/healthz` and at the foot of the You screen.
 
-```bash
-cd "current build"
-FAST_BIND_IP=127.0.0.1 docker compose up -d --build
-```
+## Limits
 
-`FAST_BIND_IP` is the address the container publishes on. The default is
-loopback: Docker's published ports bypass UFW, so binding every interface puts
-the app on the internet directly, around whatever proxy terminates TLS. Set it to
-the address your proxy reaches.
+- The thresholds are provisional and are being validated.
+- A result compares one muscle with itself, within one recording. Electrode
+  placement matters more than anything else you do.
+- Sharp pain is not fatigue. If it hurts, stop.
+- Nothing here replaces a clinician.
 
-The database lives on the `fast_data` volume at `/data`. Uploads are held in
-memory only and expire after 30 minutes.
+## Licence
 
-The running version is at `/healthz` and at the foot of the You screen. Stamp the commit
-into the image with `FAST_BUILD=$(git rev-parse --short HEAD)`.
-
-## Accounts and privacy
-
-An account is a username and a password. Passwords are hashed with `scrypt` at
-n=2^15, and the cost and the salt travel inside the stored string so the cost can
-be raised later without locking anyone out. Signing in mints a random session
-token whose sha256 the database holds, so a copy of `fast.db` cannot be turned
-into a set of working cookies. The cookie is HttpOnly, SameSite=Lax, Secure
-whenever `FAST_COOKIE_SECURE=1`, and lasts thirty days; its expiry is enforced
-server-side, not only in the browser.
-
-Five wrong attempts per account and address are throttled for fifteen minutes,
-and twelve per account name, because behind the proxy every request can look like
-it came from the proxy: the pair alone would let one person lock an athlete out
-for everyone. Sign-in answers "Wrong username or password" for both a missing
-account and a wrong password, and runs a dummy hash in the first case so the two
-take the same time.
-
-Nobody can list the accounts on this server. Deleting an account asks for the
-password again, then removes the account, its results and every session.
-
-Accounts created before this build have no password. The operator sets one from
-the container, prompted on the terminal, so no credential passes through a shell
-argument, a file or a chat message:
-
-    docker compose exec signal-analyzer python3 store.py passwd hilal
-
-There is no email on this server, so that command is also the reset path. It
-signs out every existing session for the account.
-
-- Say so plainly if it matters: the app is a research prototype, its thresholds
-  are provisional, and an account here guards saved readings, not medical data.
+MIT. See [LICENSE](LICENSE). Third-party notices are in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

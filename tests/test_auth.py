@@ -10,7 +10,7 @@ import sys
 
 import pytest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'current build'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'app'))
 
 from fastapi.testclient import TestClient  # noqa: E402
 

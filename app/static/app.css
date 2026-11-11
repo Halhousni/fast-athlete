@@ -194,6 +194,10 @@ p { color: var(--text-2); }
 .btn--text:hover { color: var(--text); }
 .btn--danger { background: var(--bad); color: #fff; }
 .btn:disabled { opacity: .45; cursor: not-allowed; }
+/* The heading takes focus so a screen reader starts at the top of the chapter.
+   It is not a control, so it does not wear a focus ring. */
+h1[tabindex="-1"]:focus { outline: none; }
+
 .btn:focus-visible, .iconbtn:focus-visible, input:focus-visible,
 .choice:focus-within, .tab:focus-visible {
   outline: 2px solid var(--focus); outline-offset: 2px;

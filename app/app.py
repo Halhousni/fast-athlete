@@ -132,11 +132,6 @@ async def index():
     return HTMLResponse(page, headers={'Cache-Control': 'no-cache'})
 
 
-@app.get('/demo.mp4')
-async def demo_video():
-    return FileResponse(BASE / 'demo.mp4', media_type='video/mp4')
-
-
 @app.get('/demo_recording.csv')
 async def demo_recording():
     return FileResponse(BASE / 'demo_recording.csv', media_type='text/csv',

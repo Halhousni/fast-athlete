@@ -1,3 +1,7 @@
+# The project name is fixed so the volume keeps its name whatever the checkout
+# directory is called.
+name: fast
+
 services:
   signal-analyzer:
     build:

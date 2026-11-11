@@ -1,0 +1,10 @@
+# Runtime dependencies. Unpinned except wsstpy: it is not on PyPI, and the
+# transform it produces is part of the method, so the commit is pinned and the
+# engine version is stored with every result.
+fastapi
+uvicorn
+python-multipart
+numpy
+scipy
+pandas
+wsstpy @ git+https://github.com/Halhousni/wsstpy@9d8f81b

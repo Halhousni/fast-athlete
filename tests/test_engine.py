@@ -5,7 +5,7 @@ import sys
 import numpy as np
 import pytest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'current build'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'app'))
 
 import engine  # noqa: E402
 
@@ -172,7 +172,7 @@ def test_a_steep_slowdown_is_red():
 def test_the_bundled_demo_gives_the_designed_verdict():
     """The demo was built with a known amount of fatigue in four muscles."""
     import ingest
-    path = os.path.join(os.path.dirname(__file__), '..', 'current build',
+    path = os.path.join(os.path.dirname(__file__), '..', 'app',
                         'demo_recording.csv')
     # The demo has no time column, so the rate is supplied, as the page does.
     parsed = ingest.load(open(path, 'rb').read(), 'demo_recording.csv', fs=1000.0)

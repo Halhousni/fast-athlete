@@ -14,9 +14,8 @@ spectrum falls the recording gets louder, which is what Zhao et al. (2025)
 read alongside the frequency shift. Fast twitch units drop out first, so the
 amplitude rises while the median frequency falls.
 
-Re-run this file to regenerate demo_recording.csv, then verify the statuses
-through the real pipeline before shipping (see the git-push-deploy skill,
-references/faaST-demo-data.md).
+Re-run this file to regenerate demo_recording.csv, then check the statuses
+through the real pipeline before committing the new file.
 """
 import os
 import numpy as np

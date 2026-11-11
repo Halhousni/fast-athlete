@@ -8,11 +8,9 @@ fast.db
 .venv/
 venv/
 
-# Docker compose environment, holds the site specific bind address
+# Per-deployment settings: bind address, cookie flag
 .env
 
-# Nextcloud sync artifacts, from before the repo left the sync root
-*conflicted copy*
-
-# Local deployment notes, kept out of the repository
-PIPELINE.md
+# Editor and OS noise
+.DS_Store
+*.swp

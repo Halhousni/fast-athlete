@@ -26,10 +26,10 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Application code.
-COPY app.py engine.py ingest.py store.py bowen_centroid.py version.py ./
+COPY app.py engine.py ingest.py store.py version.py ./
 COPY templates ./templates
 COPY static ./static
-COPY demo.mp4 demo_recording.csv ./
+COPY demo_recording.csv ./
 
 # The commit stamp goes in after the dependencies, so changing it does not
 # reinstall NumPy and SciPy.
