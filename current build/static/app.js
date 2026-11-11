@@ -128,6 +128,9 @@ function toggleTheme() {
 // ── navigation ──────────────────────────────────────────────────────────────
 function nav(screen) {
   state.screen = screen;
+  // Opening Home after a pause replays the sweep: an entrance that only ever
+  // fires on the first paint is an entrance nobody sees.
+  if (screen === 'home' && Date.now() - dialLastPlay > 20_000) dialNonce += 1;
   for (const name of ['home', 'check', 'train', 'history', 'profile']) {
     $('#screen-' + name).classList.toggle('hidden', name !== screen);
   }
@@ -944,91 +947,98 @@ function palette() {
   };
 }
 
-// Radius is area-proportional: a linear map crowds every low value into the
-// small inner ring and spreads the high ones thin on the outside, which reads
-// as a broken fan rather than a recording.
-const R_IN = 302;
-const R_OUT = 486;
-const radiusFor = (t) => {
-  const v = Math.max(0, Math.min(1, t));
-  return Math.sqrt(R_IN * R_IN + v * (R_OUT * R_OUT - R_IN * R_IN));
-};
+// ── the engraving ─────────────────────────────────────────────────────────
+// Straight from the reference the client approved (001-etched-disc): one hair
+// per instant, radius from its dominant frequency, a gradient that fades at
+// both ends so the marks read as engraving rather than as bars, and a second
+// pass of half-scale ticks that gives the face its texture.
+const RING = 520;
+const ART_IN = 140;
+const ART_SPAN = 380;
+const ART_STEP = (t, from, to) => from + Math.max(0, Math.min(1, t)) * (to - from);
 
-// ── the engraving, drawn once and reused ──────────────────────────────────
-// 120 strokes with their own gradients cost more than a frame budget allows on
-// a laptop without GPU acceleration, so it is rendered offscreen when the data
-// changes and blitted. The sweep is a clip, not a redraw.
-let engraveCache = { key: '', canvas: null, k: 0 };
+let engraveCache = { key: '', canvas: null };
 
-function engravingFor(strip, k, faint) {
-  const key = `${strip.grid ? strip.grid.length : 0}:${strip.cols}x${strip.rows}:`
-    + `${strip.mdf ? strip.mdf.length : 0}:${faint ? 1 : 0}:${k.toFixed(2)}`;
+function dominating(bytes, cols, rows) {
+  const f = new Float32Array(cols);
+  const power = new Float32Array(cols);
+  for (let n = 0; n < cols; n += 1) {
+    let best = 0, row = 0;
+    for (let i = 0; i < rows; i += 1) {
+      const v = bytes[i * cols + n];
+      if (v > best) { best = v; row = i; }
+    }
+    f[n] = rows > 1 ? row / (rows - 1) : 0;
+    power[n] = best / 255;
+  }
+  return { f, power };
+}
+
+function engravingFor(strip, faint) {
+  const { cols, rows, bytes } = strip;
+  const key = `${cols}x${rows}:${bytes.length}:${strip.mdf ? strip.mdf.length : 0}:`
+    + `${faint ? 'f' : 's'}:${palette().text}`;
   if (engraveCache.key === key && engraveCache.canvas) return engraveCache.canvas;
 
-  const W = DIAL.size;
-  const c = document.createElement('canvas');
+  const W = DIAL.size, c = document.createElement('canvas');
   c.width = W; c.height = W;
   const ctx = c.getContext('2d');
   const cx = W / 2, cy = W / 2;
-  const pal = palette();
-  // A hairline's brightness carries its energy, compressed so a quiet band
-  // still draws: without this the engraving vanishes wherever the muscle was
-  // carrying little high-frequency signal.
-  const base = faint ? 0.20 : 0.30;
-  const { cols, rows, bytes } = strip;
+  const colour = palette().text;
+  const { f, power } = dominating(bytes, cols, rows);
+  const dim = faint ? 0.78 : 1;
 
-  // One mark per (instant, frequency) cell that carries energy: angle is time,
-  // radius is frequency, brightness and length are power. The dominant
-  // frequency alone is too jumpy a signal to engrave -- it collapses most of a
-  // recording onto the inner ring and leaves the face empty.
-  const floor = 26;
-  const peak = Math.max(1, Math.max(...bytes));
-
+  // the recording: one hair per instant
   for (let n = 0; n < cols; n += 1) {
     const theta = (n / cols) * Math.PI * 2 - Math.PI / 2;
+    const r = ART_STEP(f[n], ART_IN, ART_IN + ART_SPAN);
+    const len = 66 + power[n] * 120;
+    const inner = r - len * 0.45, outer = r + len * 0.55;
     const cos = Math.cos(theta), sin = Math.sin(theta);
-    let top = 0;
-    for (let i = 0; i < rows; i += 1) {
-      const v = bytes[i * cols + n];
-      if (v > top) top = v;
-    }
-    if (top < floor) continue;
-    const cut = Math.max(floor, top * 0.34);
-    for (let i = 0; i < rows; i += 1) {
-      const v = bytes[i * cols + n];
-      if (v < cut) continue;
-      const level = v / peak;
-      const r = radiusFor(i / (rows - 1));
-      const len = (9 + level * 30) * Math.min(1.6, k * 0.8);
-      const a = base * 0.7 + Math.pow(level, 0.7) * 0.72;
-      ctx.globalAlpha = Math.min(1, a);
-      ctx.beginPath();
-      ctx.moveTo(cx + cos * (r - len * 0.5), cy + sin * (r - len * 0.5));
-      ctx.lineTo(cx + cos * (r + len * 0.5), cy + sin * (r + len * 0.5));
-      ctx.strokeStyle = pal.text;
-      ctx.lineWidth = 1.5 * Math.min(1.5, k * 0.9);
-      ctx.stroke();
-    }
+    const g = ctx.createLinearGradient(cx + cos * inner, cy + sin * inner,
+                                       cx + cos * outer, cy + sin * outer);
+    g.addColorStop(0, 'transparent');
+    g.addColorStop(0.5, colour);
+    g.addColorStop(1, 'transparent');
+    ctx.globalAlpha = (0.26 + Math.sqrt(power[n]) * 0.5) * dim;
+    ctx.strokeStyle = g;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(cx + cos * inner, cy + sin * inner);
+    ctx.lineTo(cx + cos * outer, cy + sin * outer);
+    ctx.stroke();
+  }
+
+  // the harmonic pass: twice as many, half as far out, a whisper
+  for (let n = 0; n < cols * 2; n += 1) {
+    const theta = (n / (cols * 2)) * Math.PI * 2 - Math.PI / 2;
+    const r = ART_STEP(f[Math.floor(n / 2)] * 0.55, ART_IN, ART_IN + ART_SPAN);
+    const cos = Math.cos(theta), sin = Math.sin(theta);
+    ctx.globalAlpha = 0.09 * dim;
+    ctx.strokeStyle = colour;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(cx + cos * (r - 22), cy + sin * (r - 22));
+    ctx.lineTo(cx + cos * (r + 22), cy + sin * (r + 22));
+    ctx.stroke();
   }
   ctx.globalAlpha = 1;
 
-  engraveCache = { key, canvas: c, k };
+  engraveCache = { key, canvas: c };
   return c;
 }
-
-const colsOf = (strip) => strip.cols || 120;
 
 // ── the dial ──────────────────────────────────────────────────────────────
 let dialLoop = 0;
 let dialPlayed = '';
 let dialStart = 0;
 let dialState = null;
+let dialHover = -1;
+let dialLastPlay = 0;
+let dialNonce = 0;
 
 function animateDial(canvas, strip, opts, key) {
   if (!canvas) return;
-  // Repaints (profile arrives, strip arrives, theme changes) update the source
-  // and leave a running sweep alone: cancelling it here is what made the
-  // animation jump straight to its last frame on a normal load.
   dialState = { canvas, strip, opts, key };
   const playing = dialLoop !== 0;
 
@@ -1042,13 +1052,14 @@ function animateDial(canvas, strip, opts, key) {
   dialStart = performance.now();
   const frame = (now) => {
     const state = dialState;
-    const t = Math.min(1, (now - dialStart) / 760);
+    const t = Math.min(1, (now - dialStart) / 900);
     drawDial(state.canvas, state.strip, Object.assign({}, state.opts, { progress: t }));
     if (t < 1) {
       dialLoop = requestAnimationFrame(frame);
     } else {
       dialLoop = 0;
       dialPlayed = state.key;
+      dialLastPlay = Date.now();
     }
   };
   dialLoop = requestAnimationFrame(frame);
@@ -1057,22 +1068,24 @@ function animateDial(canvas, strip, opts, key) {
 function drawDial(canvas, strip, opts) {
   const options = opts || {};
   const status = options.status || 'grey';
-  const W = DIAL.size, cx = W / 2, cy = W / 2, R = DIAL.radius;
+  const W = DIAL.size, cx = W / 2, cy = W / 2;
   if (canvas.width !== W) { canvas.width = W; canvas.height = W; }
   const ctx = canvas.getContext('2d');
   ctx.clearRect(0, 0, W, W);
 
   const shown = canvas.clientWidth || 560;
-  const k = Math.min(4, Math.max(1.35, W / shown));
+  const typeK = shown < 420 ? 1.7 : 1;       // the reference sizes, phone-adjusted
   const pal = palette();
   const p = options.progress === undefined ? 1 : options.progress;
   const clamp = (v) => Math.max(0, Math.min(1, v));
-  const sweep = clamp(p / 0.68);          // the engraving finishes first
-  const chrome = 0.38 + 0.62 * clamp((p - 0.30) / 0.45);  // rings are present from the start
-  const word = clamp((p - 0.80) / 0.20);   // then the verdict
+  const sweep = clamp(p / 0.62);
+  const ringIn = clamp((p - 0.25) / 0.35);
+  const lineIn = clamp((p - 0.45) / 0.35);
+  const wordIn = clamp((p - 0.75) / 0.25);
 
+  // the recording, swept in like ink around the dial
   if (strip && strip.bytes) {
-    const art = engravingFor(strip, k, !!options.sample);
+    const art = engravingFor(strip, !!options.sample);
     if (sweep >= 1) {
       ctx.drawImage(art, 0, 0);
     } else {
@@ -1086,94 +1099,113 @@ function drawDial(canvas, strip, opts) {
       ctx.restore();
     }
   }
-  // the median frequency, drawn over the engraving in the verdict's colour
+
+  // faint concentric rules
+  ctx.strokeStyle = pal.line;
+  for (let r = 140; r <= 520; r += 40) {
+    ctx.globalAlpha = ringIn * 0.5;
+    ctx.lineWidth = 1.2;
+    ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
+  }
+
+  // three zones: the traffic light bent into a circle
+  for (let z = 0; z < 3; z += 1) {
+    const a0 = -Math.PI / 2 + ZONE_EDGES[z] * Math.PI * 2;
+    const a1 = -Math.PI / 2 + ZONE_EDGES[z + 1] * Math.PI * 2;
+    const active = ZONE_WORDS[z] === DIAL_WORD[status];
+    ctx.beginPath(); ctx.arc(cx, cy, RING, a0, a1);
+    ctx.strokeStyle = pal[ZONE_TOKENS[z].slice(2)];
+    ctx.globalAlpha = ringIn * (options.sample ? 0.10 : (active ? 0.30 : 0.14));
+    ctx.lineWidth = 14; ctx.stroke();
+
+    const mid = (a0 + a1) / 2;
+    ctx.globalAlpha = ringIn * 0.42;
+    ctx.fillStyle = pal.text;
+    ctx.font = `500 ${Math.round(15 * typeK)}px ui-monospace, SFMono-Regular, Menlo, monospace`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(ZONE_WORDS[z], cx + Math.cos(mid) * (RING + 32),
+      cy + Math.sin(mid) * (RING + 32));
+  }
+
+  // the line that carries the verdict, drawn on as the sweep passes it
   if (strip && strip.mdf && strip.mdf.length) {
+    const upto = Math.round((strip.mdf.length - 1) * sweep);
     ctx.beginPath();
     let started = false;
-    const upto = Math.round((strip.mdf.length - 1) * sweep);
     for (let n = 0; n <= upto; n += 1) {
       const f = strip.mdf[n];
       if (!f) continue;
-      const theta = (n / colsOf(strip)) * Math.PI * 2 - Math.PI / 2;
-      const r = radiusFor((f - (strip.f0 || 1)) / ((strip.f1 || 35) - (strip.f0 || 1)));
+      const theta = (n / strip.cols) * Math.PI * 2 - Math.PI / 2;
+      const r = ART_STEP((f - 1) / 34, ART_IN, ART_IN + ART_SPAN);
       const x = cx + Math.cos(theta) * r, y = cy + Math.sin(theta) * r;
       if (!started) { ctx.moveTo(x, y); started = true; } else { ctx.lineTo(x, y); }
     }
     ctx.strokeStyle = pal[zoneToken(status).slice(2)] || pal.grey;
-    ctx.globalAlpha = options.sample ? 0.35 : 0.9;
-    ctx.lineWidth = 3.2 * k; ctx.lineJoin = 'round'; ctx.stroke();
-    ctx.globalAlpha = 1;
+    ctx.globalAlpha = lineIn * (options.sample ? 0.4 : 1);
+    ctx.lineWidth = 3.2;
+    ctx.lineJoin = 'round';
+    ctx.stroke();
   }
 
-  // rings and zones stay visible while the data draws
-
-  ctx.globalAlpha = chrome;
-  for (let ring = 0; ring < 4; ring += 1) {
-    ctx.beginPath(); ctx.arc(cx, cy, 310 + ring * 48, 0, Math.PI * 2);
-    ctx.strokeStyle = pal.line; ctx.globalAlpha = chrome * 0.45;
-    ctx.lineWidth = 1.2 * k; ctx.stroke();
-  }
-  ctx.globalAlpha = chrome;
-
-  for (let z = 0; z < 3; z += 1) {
-    const a0 = -Math.PI / 2 + ZONE_EDGES[z] * Math.PI * 2;
-    const a1 = -Math.PI / 2 + ZONE_EDGES[z + 1] * Math.PI * 2;
-    ctx.beginPath(); ctx.arc(cx, cy, R, a0, a1);
-    ctx.strokeStyle = pal[ZONE_TOKENS[z].slice(2)];
-    ctx.globalAlpha = chrome * (options.sample ? 0.22
-      : (ZONE_WORDS[z] === DIAL_WORD[status] ? 0.55 : 0.22));
-    ctx.lineWidth = 14 * k; ctx.stroke();
-    ctx.globalAlpha = chrome;
-    const mid = (a0 + a1) / 2;
-    ctx.fillStyle = pal.text3;
-    ctx.font = `600 ${Math.round(15 * k)}px ui-monospace, SFMono-Regular, Menlo, monospace`;
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText(ZONE_WORDS[z], cx + Math.cos(mid) * (R - 44), cy + Math.sin(mid) * (R - 44));
-  }
-
-  if (!options.sample && status !== 'grey' && word > 0) {
+  // the reading: a needle at how spent the muscle is, not a progress bar
+  if (!options.sample && status !== 'grey' && wordIn > 0) {
     const score = Math.max(0, Math.min(100, options.score || 0));
     let lo = 0.02, hi = 0.28, frac = (100 - score) / 30;
     if (status === 'red') { lo = 0.60; hi = 0.94; frac = (39 - Math.min(score, 39)) / 39; }
     else if (status === 'amber') { lo = 0.32; hi = 0.58; frac = (69 - score) / 29; }
     const spent = lo + (hi - lo) * clamp(frac);
     const a = -Math.PI / 2 + spent * Math.PI * 2;
-    const x = cx + Math.cos(a) * R, y = cy + Math.sin(a) * R;
-    ctx.globalAlpha = word;
-    ctx.beginPath(); ctx.arc(x, y, 12 * k, 0, Math.PI * 2);
+    const x = cx + Math.cos(a) * RING, y = cy + Math.sin(a) * RING;
+    ctx.globalAlpha = wordIn;
+    ctx.beginPath(); ctx.arc(x, y, 11, 0, Math.PI * 2);
     ctx.fillStyle = pal.text; ctx.fill();
-    ctx.beginPath(); ctx.arc(x, y, 6 * k, 0, Math.PI * 2);
+    ctx.beginPath(); ctx.arc(x, y, 5.5, 0, Math.PI * 2);
     ctx.fillStyle = pal[zoneToken(status).slice(2)] || pal.grey; ctx.fill();
   }
 
-  if (word <= 0) { ctx.globalAlpha = 1; return; }
-  ctx.globalAlpha = 0.84 * word;
-  ctx.fillStyle = pal.bg;
-  ctx.beginPath(); ctx.arc(cx, cy, 292, 0, Math.PI * 2); ctx.fill();
+  if (wordIn <= 0) { ctx.globalAlpha = 1; return; }
 
-  ctx.globalAlpha = word;
+  // centre: subject, verdict, age
+  ctx.globalAlpha = wordIn;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.fillStyle = pal.text3;
-  ctx.font = `500 ${Math.round(22 * k)}px ui-monospace, SFMono-Regular, Menlo, monospace`;
-  ctx.fillText((options.subject || '').toUpperCase(), cx, cy - 96 * Math.min(k, 2));
+  ctx.font = `500 ${Math.round(24 * typeK)}px ui-monospace, SFMono-Regular, Menlo, monospace`;
+  ctx.fillText((options.subject || '').toUpperCase(), cx, cy - 78 * typeK);
 
   const label = options.word || '';
   ctx.fillStyle = pal.text;
-  let size = 92 * Math.min(k, 2.2);
-  const typeface = '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
-  ctx.font = `300 ${size}px ${typeface}`;
+  let size = 96;
+  const face = '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+  ctx.font = `300 ${size}px ${face}`;
   while (size > 22 && ctx.measureText(label).width > 420) {
     size *= 0.92;
-    ctx.font = `300 ${size}px ${typeface}`;
+    ctx.font = `300 ${size}px ${face}`;
   }
-  ctx.fillText(label, cx, cy + 6);
+  ctx.fillText(label, cx, cy + 8);
 
   ctx.fillStyle = pal.text3;
-  ctx.font = `400 ${Math.round(19 * k)}px ui-monospace, SFMono-Regular, Menlo, monospace`;
-  ctx.fillText(options.foot || '', cx, cy + 96 * Math.min(k, 2));
-
-  // no watermark inside the face: the caption and the word already say it
+  ctx.font = `400 ${Math.round(21 * typeK)}px ui-monospace, SFMono-Regular, Menlo, monospace`;
+  ctx.fillText(options.foot || '', cx, cy + 78 * typeK);
   ctx.globalAlpha = 1;
+
+  // the reference's one interaction: the hair under the pointer ignites
+  if (dialHover >= 0 && strip && strip.bytes && canvas === $('#home-disc')) {
+    const { cols, rows, bytes } = strip;
+    const { f, power } = dominating(bytes, cols, rows);
+    const n = Math.min(cols - 1, dialHover);
+    const theta = (n / cols) * Math.PI * 2 - Math.PI / 2;
+    const r = ART_STEP(f[n], ART_IN, ART_IN + ART_SPAN);
+    const len = 66 + power[n] * 120;
+    const inner = r - len * 0.45, outer = r + len * 0.55;
+    const cos = Math.cos(theta), sin = Math.sin(theta);
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = pal.text;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(cx + cos * inner, cy + sin * inner);
+    ctx.lineTo(cx + cos * outer, cy + sin * outer);
+    ctx.stroke();
+  }
 }
 
 // ── naming ────────────────────────────────────────────────────────────────
@@ -1399,7 +1431,7 @@ function paintHome(model) {
   if (strip && strip.grid && !strip.bytes) {
     strip.bytes = Uint8Array.from(atob(strip.grid), (c) => c.charCodeAt(0));
   }
-  const dialKey = `${mode}|${status}|${worst ? worst.score : ''}|${model.at || ''}`;
+  const dialKey = `${mode}|${status}|${worst ? worst.score : ''}|${model.at || ''}|${dialNonce}`;
   animateDial($('#home-disc'), strip, {
     status: mode === 'unreadable' || !showVerdict ? 'grey' : status,
     sample: mode === 'sample' || mode === 'none',
@@ -1997,6 +2029,33 @@ function wire() {
 
   $('#home-start').addEventListener('click', () => nav('check'));
   $('#home-start-m').addEventListener('click', () => nav('check'));
+
+  // The reference's one interaction: the hair under the pointer ignites.
+  const disc = $('#home-disc');
+  const redrawStatic = () => {
+    if (!dialState || dialLoop) return;
+    drawDial(dialState.canvas, dialState.strip,
+      Object.assign({}, dialState.opts, { progress: 1 }));
+  };
+  disc.addEventListener('pointermove', (event) => {
+    const box = disc.getBoundingClientRect();
+    if (!box.width) return;
+    const W = DIAL.size;
+    const x = ((event.clientX - box.left) / box.width) * W - W / 2;
+    const y = ((event.clientY - box.top) / box.height) * W - W / 2;
+    if (Math.hypot(x, y) < 150) {
+      if (dialHover !== -1) { dialHover = -1; redrawStatic(); }
+      return;
+    }
+    let angle = Math.atan2(y, x) + Math.PI / 2;
+    if (angle < 0) angle += Math.PI * 2;
+    const cols = (dialState && dialState.strip && dialState.strip.cols) || 120;
+    const index = Math.round((angle / (Math.PI * 2)) * cols) % cols;
+    if (index !== dialHover) { dialHover = index; redrawStatic(); }
+  });
+  disc.addEventListener('pointerleave', () => {
+    if (dialHover !== -1) { dialHover = -1; redrawStatic(); }
+  });
 
 
   $('#sheet-close').addEventListener('click', () => { $('#sheet').hidden = true; });
