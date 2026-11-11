@@ -47,16 +47,37 @@
         <p class="safety">Sharp pain is not fatigue. If it hurts, stop and get it looked
           at, even if this says ready.</p>
 
-        <div class="more" id="home-more" hidden>
-          <button class="more-btn" id="why" type="button" aria-expanded="false"
-                  aria-controls="why-body">Why <span id="why-word">rest</span>?</button>
-          <div class="answer" id="why-body">
+        <details class="more" id="home-more" hidden>
+          <summary class="more-btn"><span>Why <span id="why-word">rest</span>?</span></summary>
+          <div class="answer">
             <p id="why-plain"></p>
-            <button class="det" id="det" type="button" aria-expanded="false"
-                    aria-controls="det-body">The numbers behind it</button>
-            <dl class="det-list" id="det-body"></dl>
+            <details class="det-more">
+              <summary class="det">The numbers behind it</summary>
+              <dl class="det-list" id="det-body"></dl>
+            </details>
           </div>
+        </details>
+        <div class="about">
+          <div class="about-row">
+            <div><span>You need</span>
+              <p>An EMG amplifier that exports CSV, TXT or MAT. You also need its
+                sampling rate.</p></div>
+            <div><span>You get</span>
+              <p>A verdict for every muscle in the file: ready, go easy or rest.</p></div>
+            <div><span>It takes</span>
+              <p>A 30-second hold, then the upload. The app answers a few seconds
+                later.</p></div>
+          </div>
+          <details class="about-more">
+            <summary>How it decides</summary>
+            <p>As a muscle tires, its signal shifts to lower frequencies and grows in
+              size. FAST compares the start of the hold with the end. The more both
+              move, the lower the score.</p>
+            <p>This is a research prototype. The thresholds are provisional, and it does
+              not replace a clinician.</p>
+          </details>
         </div>
+
       </div>
 
       <div class="disc">
@@ -67,14 +88,15 @@
     </div>
 
     <div class="home-foot" id="home-foot"></div>
-    <div class="mobile-cta"><button id="home-start-m" type="button">Check my calf · 30 sec</button></div>
+    <div class="mobile-cta"><button id="home-start-m" type="button">Start a check · 30 s</button></div>
   </section>
 
   <section id="screen-check" class="hidden" aria-labelledby="check-title">
 
     <div id="stage-idle">
       <div class="verdict">
-        <h1 id="check-title">Start a check</h1>
+        <p class="eyebrow">Check · 30 seconds</p>
+      <h1 id="check-title">Start a check</h1>
         <p class="lede">Measure how recovered each muscle is from a recording of its
           electrical activity, and see which ones can train today.</p>
       </div>
@@ -139,18 +161,21 @@
 
   <!-- ══ TRAIN ═══════════════════════════════════════════════════════════ -->
   <section id="screen-train" class="hidden" aria-labelledby="train-title">
-    <h1 id="train-title">Today</h1>
+    <p class="eyebrow">Today</p>
+    <h1 id="train-title">What to train</h1>
     <div id="train-body"></div>
   </section>
 
   <!-- ══ HISTORY ═════════════════════════════════════════════════════════ -->
   <section id="screen-history" class="hidden" aria-labelledby="history-title">
-    <h1 id="history-title">History</h1>
+    <p class="eyebrow">History</p>
+    <h1 id="history-title">Every check</h1>
     <div id="history-body"></div>
   </section>
 
   <!-- ══ PROFILE ═════════════════════════════════════════════════════════ -->
   <section id="screen-profile" class="hidden" aria-labelledby="profile-title">
+    <p class="eyebrow">Profile</p>
     <h1 id="profile-title">Who is checking?</h1>
     <div id="profile-body"></div>
   </section>
