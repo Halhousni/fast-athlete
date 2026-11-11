@@ -330,3 +330,34 @@ def _now() -> str:
 
 def _token_hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
+
+
+# ── command line ─────────────────────────────────────────────────────────────
+# One job, for the operator: give an account a password, prompting on the tty.
+# Nothing secret passes through a shell argument, a file, or a chat message.
+#   docker compose exec signal-analyzer python3 store.py passwd hilal
+
+if __name__ == '__main__':
+    import getpass
+    import sys
+
+    args = sys.argv[1:]
+    if len(args) != 2 or args[0] != 'passwd':
+        print('usage: python3 store.py passwd <username>')
+        raise SystemExit(2)
+
+    st = Store(os.environ.get('FAST_DATA_DIR', '/data'))
+    row = st.account_by_username(args[1].strip().lower())
+    if not row:
+        print('No account called', args[1])
+        raise SystemExit(1)
+    first = getpass.getpass('New password: ')
+    if first != getpass.getpass('Again: '):
+        print('They do not match. Nothing changed.')
+        raise SystemExit(1)
+    if len(first) < PASSWORD_MIN:
+        print(f'At least {PASSWORD_MIN} characters. Nothing changed.')
+        raise SystemExit(1)
+    st.set_password(row['id'], first)
+    st.revoke_all(row['id'])
+    print('Set. Every existing session for', row['name'], 'has been signed out.')
