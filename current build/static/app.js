@@ -990,9 +990,9 @@ function palette() {
 // The approved reference (001-etched-disc), ported: one hair per instant, a
 // gradient that fades at both ends so the marks read as engraving, a second
 // register of short ticks behind them, and a verdict line through the ridge.
-const RING = 500;
-const ART_IN = 140;
-const ART_SPAN = 356;
+const RING = 468;
+const ART_IN = 132;
+const ART_SPAN = 330;
 const COLS_FALLBACK = 120;
 const ART = (t) => ART_IN + Math.max(0, Math.min(1, t)) * ART_SPAN;
 
@@ -1235,7 +1235,7 @@ function drawDial(canvas, strip, opts) {
     const active = ZONE_WORDS[z] === DIAL_WORD[status];
     ctx.beginPath(); ctx.arc(cx, cy, RING, a0, a1);
     ctx.strokeStyle = pal[ZONE_TOKENS[z].slice(2)];
-    ctx.globalAlpha = ringIn * (options.sample ? 0.30 : (active ? 0.34 : 0.16));
+    ctx.globalAlpha = ringIn * (options.sample ? 0.40 : (active ? 0.44 : 0.20));
     ctx.lineWidth = 14; ctx.stroke();
 
     const mid = (a0 + a1) / 2;
@@ -1246,8 +1246,8 @@ function drawDial(canvas, strip, opts) {
     const label = ZONE_WORDS[z];
     const w = ctx.measureText(label).width;
     const lx = Math.max(w / 2 + 8, Math.min(W - w / 2 - 8,
-      cx + Math.cos(mid) * (RING + 38)));
-    ctx.fillText(label, lx, cy + Math.sin(mid) * (RING + 38));
+      cx + Math.cos(mid) * (RING + 42)));
+    ctx.fillText(label, lx, cy + Math.sin(mid) * (RING + 42));
   }
 
   // the engraving, revealed by the stylus rather than a wedge
