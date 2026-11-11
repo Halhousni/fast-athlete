@@ -622,12 +622,12 @@ async function saveIfPossible() {
 // picture is the measurement: brightness is amplitude, the ridge is frequency,
 // and the two together are what the method reads.
 const STRIP_RAMP = [
-  [0.00, [22, 22, 24]],     // #161618, the card ground
-  [0.20, [14, 42, 48]],
-  [0.45, [11, 92, 104]],
-  [0.70, [18, 169, 184]],
-  [0.88, [22, 224, 240]],   // the identity cyan
-  [1.00, [217, 252, 255]],
+  [0.00, [22, 22, 31]],     // #16161F, the card ground
+  [0.20, [44, 44, 58]],
+  [0.45, [86, 85, 100]],
+  [0.70, [140, 138, 148]],
+  [0.88, [200, 197, 190]],
+  [1.00, [242, 239, 232]],  // the plate's ink
 ];
 
 function rampColour(t) {
@@ -1089,6 +1089,18 @@ function hairOf(plane, n) {
   return { r, len, inner: r - len * 0.45, outer: r + len * 0.55, p };
 }
 
+// Canvas paints 'transparent' as rgba(0,0,0,0), so a gradient to it darkens
+// through grey. Fade through the ink's own colour at zero alpha instead.
+function withAlpha(colour, alpha) {
+  if (!colour.startsWith('#')) return colour;
+  const hex = colour.slice(1);
+  const full = hex.length === 3 ? hex.split('').map((c) => c + c).join('') : hex;
+  const r = parseInt(full.slice(0, 2), 16);
+  const g = parseInt(full.slice(2, 4), 16);
+  const b = parseInt(full.slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
 function engravingFor(strip, faint) {
   const plane = planeFor(strip);
   const { cols } = plane;
@@ -1127,12 +1139,12 @@ function engravingFor(strip, faint) {
     const cos = Math.cos(theta), sin = Math.sin(theta);
     const g = ctx.createLinearGradient(cx + cos * hair.inner, cy + sin * hair.inner,
                                        cx + cos * hair.outer, cy + sin * hair.outer);
-    g.addColorStop(0, 'transparent');
+    g.addColorStop(0, withAlpha(colour, 0));
     g.addColorStop(0.5, colour);
-    g.addColorStop(1, 'transparent');
-    ctx.globalAlpha = (0.30 + hair.p * 0.58) * dim;
+    g.addColorStop(1, withAlpha(colour, 0));
+    ctx.globalAlpha = (0.44 + hair.p * 0.52) * dim;
     ctx.strokeStyle = g;
-    ctx.lineWidth = 2.2;
+    ctx.lineWidth = 3;
     ctx.beginPath();
     ctx.moveTo(cx + cos * hair.inner, cy + sin * hair.inner);
     ctx.lineTo(cx + cos * hair.outer, cy + sin * hair.outer);
@@ -1223,7 +1235,7 @@ function drawDial(canvas, strip, opts) {
     const active = ZONE_WORDS[z] === DIAL_WORD[status];
     ctx.beginPath(); ctx.arc(cx, cy, RING, a0, a1);
     ctx.strokeStyle = pal[ZONE_TOKENS[z].slice(2)];
-    ctx.globalAlpha = ringIn * (options.sample ? 0.22 : (active ? 0.30 : 0.14));
+    ctx.globalAlpha = ringIn * (options.sample ? 0.30 : (active ? 0.34 : 0.16));
     ctx.lineWidth = 14; ctx.stroke();
 
     const mid = (a0 + a1) / 2;
