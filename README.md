@@ -89,24 +89,37 @@ the address your proxy reaches.
 The database lives on the `fast_data` volume at `/data`. Uploads are held in
 memory only and expire after 30 minutes.
 
-The running version is at `/healthz` and on the Profile screen. Stamp the commit
+The running version is at `/healthz` and at the foot of the You screen. Stamp the commit
 into the image with `FAST_BUILD=$(git rev-parse --short HEAD)`.
 
-## Profiles and privacy
+## Accounts and privacy
 
-A profile PIN gates a session token, and the token is required by `/history`,
-`/save` and deleting a profile. PINs are stored with `scrypt` and a per-profile
-salt, five wrong attempts per profile are throttled for fifteen minutes, and
-profiles created by earlier builds (unsalted hash) are accepted once and
-upgraded.
+An account is a username and a password. Passwords are hashed with `scrypt` at
+n=2^15, and the cost and the salt travel inside the stored string so the cost can
+be raised later without locking anyone out. Signing in mints a random session
+token whose sha256 the database holds, so a copy of `fast.db` cannot be turned
+into a set of working cookies. The cookie is HttpOnly, SameSite=Lax, Secure
+whenever `FAST_COOKIE_SECURE=1`, and lasts thirty days; its expiry is enforced
+server-side, not only in the browser.
 
-The profile list is visible to anyone who can reach the page, because choosing a
-profile is how you sign in. Names are the only thing it exposes.
+Five wrong attempts per account and address are throttled for fifteen minutes,
+and twelve per account name, because behind the proxy every request can look like
+it came from the proxy: the pair alone would let one person lock an athlete out
+for everyone. Sign-in answers "Wrong username or password" for both a missing
+account and a wrong password, and runs a dummy hash in the first case so the two
+take the same time.
 
-## Limits
+Nobody can list the accounts on this server. Deleting an account asks for the
+password again, then removes the account, its results and every session.
 
-- One analysis at a time is allowed two in parallel; a channel costs about
-  0.7 s, and eight about 6 s.
-- Uploads are capped at 25 MB.
-- The interface has no accounts, no email, and no recovery: a forgotten PIN means
-  a new profile. Say so if that matters for your use.
+Accounts created before this build have no password. The operator sets one from
+the container, prompted on the terminal, so no credential passes through a shell
+argument, a file or a chat message:
+
+    docker compose exec signal-analyzer python3 store.py passwd hilal
+
+There is no email on this server, so that command is also the reset path. It
+signs out every existing session for the account.
+
+- Say so plainly if it matters: the app is a research prototype, its thresholds
+  are provisional, and an account here guards saved readings, not medical data.
