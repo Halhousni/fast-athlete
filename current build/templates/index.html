@@ -72,22 +72,22 @@
     <div class="home">
       <div class="home-copy">
         <p class="ask"><i></i><span id="home-ask">No check yet today</span></p>
-        <h1 id="home-title">Check your calf.</h1>
+        <h1 id="home-title">Check a muscle</h1>
 
         <p class="home-verdict" id="home-verdict" hidden>
           <i></i><span id="home-verdict-text"></span>
         </p>
 
-        <p class="lead" id="home-lead">Thirty seconds of signal from one muscle tells
-          you whether it has recovered enough to load today.</p>
+        <p class="lead" id="home-lead">A 30-second hold shows whether this muscle
+          tires early.</p>
 
         <div class="cta home-cta">
-          <button class="btn btn--primary" id="home-start" type="button">Check my calf · 30 sec</button>
+          <button class="btn btn--primary" id="home-start" type="button">Start a check · 30 s</button>
           <span class="hint">Saved to your history</span>
         </div>
 
-        <p class="safety">Sharp pain is not fatigue. If it hurts, stop and get it looked
-          at, even if this says ready.</p>
+        <p class="safety">Sharp pain is not fatigue. If it hurts, stop, even if this
+          says ready.</p>
 
         <details class="more" id="home-more" hidden>
           <summary class="more-btn"><span>Why <span id="why-word">rest</span>?</span></summary>
@@ -102,19 +102,17 @@
         <div class="about">
           <div class="about-row">
             <div><span>You need</span>
-              <p>An EMG amplifier that exports CSV, TXT or MAT. You also need its
-                sampling rate.</p></div>
+              <p>An EMG amplifier that exports CSV, TXT or MAT, and its sampling rate.</p></div>
             <div><span>You get</span>
-              <p>A verdict for every muscle in the file: ready, go easy or rest.</p></div>
+              <p>A verdict for every muscle in the file.</p></div>
             <div><span>It takes</span>
-              <p>A 30-second hold, then the upload. The app answers a few seconds
-                later.</p></div>
+              <p>30 seconds of holding, then a few seconds to read.</p></div>
           </div>
           <details class="about-more">
             <summary>How it decides</summary>
-            <p>As a muscle tires, its signal shifts to lower frequencies and grows in
-              size. FAST compares the start of the hold with the end. The more both
-              move, the lower the score.</p>
+            <p>As a muscle tires, its signal shifts to lower frequencies and grows.
+              FAST compares the start of the hold with the end; the more both move,
+              the lower the score.</p>
             <p>This is a research prototype. The thresholds are provisional, and it does
               not replace a clinician.</p>
           </details>

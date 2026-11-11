@@ -990,8 +990,8 @@ function palette() {
 // gradient that fades at both ends so the marks read as engraving, a second
 // register of short ticks behind them, and a verdict line through the ridge.
 const RING = 468;
-const ART_IN = 132;
-const ART_SPAN = 330;
+const ART_IN = 150;
+const ART_SPAN = 288;      // outer edge 438: a small gap to the band
 const COLS_FALLBACK = 120;
 const ART = (t) => ART_IN + Math.max(0, Math.min(1, t)) * ART_SPAN;
 
@@ -1081,6 +1081,19 @@ function planeFor(strip) {
   return planeCache.data;
 }
 
+function medianSmooth(values, w) {
+  const half = Math.floor(w / 2);
+  return values.map((_, i) => {
+    const win = [];
+    for (let k = i - half; k <= i + half; k += 1) {
+      const v = values[Math.max(0, Math.min(values.length - 1, k))];
+      if (v) win.push(v);
+    }
+    win.sort((a, b) => a - b);
+    return win.length ? win[Math.floor(win.length / 2)] : 0;
+  });
+}
+
 function hairOf(plane, n) {
   const p = plane.power[n];
   const r = ART(plane.reach[n]);
@@ -1143,7 +1156,7 @@ function engravingFor(strip, faint) {
     g.addColorStop(1, withAlpha(colour, 0));
     ctx.globalAlpha = (0.44 + hair.p * 0.52) * dim;
     ctx.strokeStyle = g;
-    ctx.lineWidth = 3;
+    ctx.lineWidth = 3.5;
     ctx.beginPath();
     ctx.moveTo(cx + cos * hair.inner, cy + sin * hair.inner);
     ctx.lineTo(cx + cos * hair.outer, cy + sin * hair.outer);
@@ -1222,31 +1235,32 @@ function drawDial(canvas, strip, opts) {
   // rules, drawn through the same radius map as everything else
   ctx.strokeStyle = pal.line;
   for (let r = 150; r <= 470; r += 40) {
-    ctx.globalAlpha = ringIn * 0.45;
+    ctx.globalAlpha = ringIn * 0.30;
     ctx.lineWidth = 1.2;
     ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
   }
 
   // three zones: the traffic light bent into a circle
+  const GAP = 0.030;                     // about 2 degrees, so the bands are separate
   for (let z = 0; z < 3; z += 1) {
-    const a0 = -Math.PI / 2 + ZONE_EDGES[z] * Math.PI * 2;
-    const a1 = -Math.PI / 2 + ZONE_EDGES[z + 1] * Math.PI * 2;
+    const a0 = -Math.PI / 2 + ZONE_EDGES[z] * Math.PI * 2 + GAP;
+    const a1 = -Math.PI / 2 + ZONE_EDGES[z + 1] * Math.PI * 2 - GAP;
     const active = ZONE_WORDS[z] === DIAL_WORD[status];
     ctx.beginPath(); ctx.arc(cx, cy, RING, a0, a1);
     ctx.strokeStyle = pal[ZONE_TOKENS[z].slice(2)];
-    ctx.globalAlpha = ringIn * (options.sample ? 0.40 : (active ? 0.44 : 0.20));
-    ctx.lineWidth = 14; ctx.stroke();
+    ctx.globalAlpha = ringIn * (options.sample ? 0.45 : (active ? 0.80 : 0.24));
+    ctx.lineWidth = 44; ctx.stroke();
 
     const mid = (a0 + a1) / 2;
-    ctx.globalAlpha = ringIn * (options.sample ? 0.30 : 0.52);
+    ctx.globalAlpha = ringIn * (options.sample ? 0.40 : (active ? 0.95 : 0.50));
     ctx.fillStyle = pal.text;
-    ctx.font = `500 ${Math.round(29 * typeK)}px ui-monospace, SFMono-Regular, Menlo, monospace`;
+    ctx.font = `500 ${Math.round(38 * typeK)}px ui-monospace, SFMono-Regular, Menlo, monospace`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     const label = ZONE_WORDS[z];
     const w = ctx.measureText(label).width;
-    const lx = Math.max(w / 2 + 8, Math.min(W - w / 2 - 8,
-      cx + Math.cos(mid) * (RING + 42)));
-    ctx.fillText(label, lx, cy + Math.sin(mid) * (RING + 42));
+    const lx = Math.max(w / 2 + 10, Math.min(W - w / 2 - 10,
+      cx + Math.cos(mid) * (RING + 64)));
+    ctx.fillText(label, lx, cy + Math.sin(mid) * (RING + 64));
   }
 
   // the engraving, revealed by the stylus rather than a wedge
@@ -1302,21 +1316,28 @@ function drawDial(canvas, strip, opts) {
   // the line that carries the verdict
   const planeOf = strip && strip.bytes ? planeFor(strip) : null;
   if (strip && strip.mdf && strip.mdf.length && !options.sample) {
-    const upto = Math.round((strip.mdf.length - 1) * clamp(travel * 1.05));
+    const smoothMdf = medianSmooth(strip.mdf, 7);
+    const upto = Math.round((smoothMdf.length - 1) * clamp(travel * 1.05));
     ctx.beginPath();
     let started = false;
     for (let n = 0; n <= upto; n += 1) {
-      const f = strip.mdf[n];
+      const f = smoothMdf[n];
       if (!f) { started = false; continue; }
       const theta = (n / strip.cols) * Math.PI * 2 - Math.PI / 2;
       const r = ART(planeOf ? planeOf.tOf(f) : (f - 1) / 34);
       const x = cx + Math.cos(theta) * r, y = cy + Math.sin(theta) * r;
       if (!started) { ctx.moveTo(x, y); started = true; } else { ctx.lineTo(x, y); }
     }
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    // a halo in the ground colour, so the line reads over the hairs
+    ctx.strokeStyle = pal.bg;
+    ctx.globalAlpha = lineIn * 0.85;
+    ctx.lineWidth = 9;
+    ctx.stroke();
     ctx.strokeStyle = pal[zoneToken(status).slice(2)] || pal.grey;
     ctx.globalAlpha = lineIn * (options.sample ? 0.4 : 1);
-    ctx.lineWidth = 3.2;
-    ctx.lineJoin = 'round';
+    ctx.lineWidth = 4.5;
     ctx.stroke();
   }
 
@@ -1330,35 +1351,38 @@ function drawDial(canvas, strip, opts) {
     const a = -Math.PI / 2 + spent * Math.PI * 2;
     const x = cx + Math.cos(a) * RING, y = cy + Math.sin(a) * RING;
     ctx.globalAlpha = wordIn;
-    ctx.beginPath(); ctx.arc(x, y, 11, 0, Math.PI * 2);
+    ctx.beginPath(); ctx.arc(x, y, 22, 0, Math.PI * 2);
+    ctx.fillStyle = pal.bg; ctx.fill();
+    ctx.beginPath(); ctx.arc(x, y, 17, 0, Math.PI * 2);
     ctx.fillStyle = pal.text; ctx.fill();
-    ctx.beginPath(); ctx.arc(x, y, 5.5, 0, Math.PI * 2);
-    ctx.fillStyle = pal[zoneToken(status).slice(2)] || pal.grey; ctx.fill();
   }
 
   if (wordIn <= 0) { ctx.globalAlpha = 1; return; }
 
-  // centre: subject, verdict, age -- the word sits in the empty core
+  // centre: one word, one line under it. The muscle is named in the caption and
+  // the headline; repeating it here only crowds the core.
   ctx.globalAlpha = wordIn;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.fillStyle = pal.text3;
-  ctx.font = `500 ${Math.round(24 * typeK)}px ui-monospace, SFMono-Regular, Menlo, monospace`;
-  ctx.fillText((options.subject || '').toUpperCase(), cx, cy - 78 * typeK);
-
   const word = options.word || '';
-  ctx.fillStyle = pal.text;
-  let size = 96;
   const face = '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+  const scored = !!options.scored;
+
+  // the two-line block is centred as a whole: word baseline, then the small line
+  const wordBase = scored ? cy - 6 * typeK : cy + 4;
+  ctx.fillStyle = pal.text;
+  let size = scored ? 84 : (word.length > 6 ? 56 : 62);
   ctx.font = `300 ${size}px ${face}`;
-  while (size > 22 && ctx.measureText(word).width > 420) {
+  while (size > 22 && ctx.measureText(word).width > 380) {
     size *= 0.92;
     ctx.font = `300 ${size}px ${face}`;
   }
-  ctx.fillText(word, cx, cy + 8);
+  ctx.globalAlpha = wordIn * (scored ? 1 : 0.62);
+  ctx.fillText(word, cx, wordBase);
 
+  ctx.globalAlpha = wordIn * 0.9;
   ctx.fillStyle = pal.text3;
-  ctx.font = `400 ${Math.round(21 * typeK)}px ui-monospace, SFMono-Regular, Menlo, monospace`;
-  ctx.fillText(options.foot || '', cx, cy + 78 * typeK);
+  ctx.font = `400 ${Math.round((scored ? 30 : 22) * typeK)}px ui-monospace, SFMono-Regular, Menlo, monospace`;
+  ctx.fillText(options.foot || '', cx, wordBase + (scored ? 74 : 54) * typeK);
   ctx.globalAlpha = 1;
 
   // the reference's interaction: the hair under the pointer ignites
@@ -1405,14 +1429,6 @@ function muscleName(result) {
 }
 
 // ── copy ──────────────────────────────────────────────────────────────────
-const HOME_COPY = {
-  red: (n) => `Your ${n} is showing fatigue. Rest it today, or keep it very light, `
-    + 'and check again tomorrow.',
-  amber: (n) => `Your ${n} is carrying some fatigue. Keep the volume down today `
-    + 'and check again tomorrow.',
-  green: (n) => `No fatigue detected in this recording of your ${n}. Train as `
-    + 'planned, and stop if anything hurts.',
-};
 
 const LAST_COPY = {
   red: (n, when) => `On ${when} your ${n} was showing fatigue.`,
@@ -1514,6 +1530,110 @@ function homeModel() {
   return { mode: 'none', worst: null, results: [], canClaim: false };
 }
 
+
+// ── the recommendation ────────────────────────────────────────────────────
+// What to do today. It may only reason from measures that exist: the two
+// deltas, the score band, and the athlete's own saved checks. No percentages
+// invented, no advice that the recording cannot support.
+function sameMuscle(results, worst) {
+  return (results || []).find((r) => r && (r.id === worst.id || r.column === worst.column));
+}
+
+// The checks before this one that belong to the same muscle and belong to the
+// same run: one per day, no gap over 72 hours, never green, never an improvement.
+function runBefore(model, worst) {
+  const rows = (state.history || []).filter((r) => Array.isArray(r.results) && r.results.length);
+  const start = model.mode === 'last' ? 1 : 0;
+  const out = [];
+  let stopped = false;
+  for (let i = start; i < rows.length && !stopped && out.length < 4; i += 1) {
+    const row = rows[i];
+    const mine = sameMuscle(row.results, worst);
+    if (!mine) continue;                       // another muscle says nothing about this run
+    if (out.length) {
+      const prevTs = new Date(out[out.length - 1].ts);
+      const thisTs = new Date(row.ts);
+      const gapH = (prevTs.getTime() - thisTs.getTime()) / 36e5;
+      if (gapH > 72) { stopped = true; break; }
+      // one check per day: testing twice in ten minutes is not two days of fatigue
+      if (prevTs.toDateString() === thisTs.toDateString()) continue;
+    }
+    if (mine.status === 'green') { stopped = true; break; }
+    const rank = RANK[mine.status];
+    const prev = out.length ? RANK[out[out.length - 1].status] : RANK[worst.status];
+    if (rank > prev) { stopped = true; break; }   // it was worse before: not a run at this level
+    out.push({ status: mine.status, ts: row.ts });
+  }
+  return out;
+}
+
+function dayWord(iso) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const now = new Date();
+  const midnight = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const days = Math.round((midnight(now) - midnight(d)) / 864e5);
+  if (days <= 0) return 'today';
+  if (days === 1) return 'yesterday';
+  return new Intl.DateTimeFormat(undefined, { weekday: 'short' }).format(d);
+}
+
+function measuresClause(result) {
+  const mdf = Number(result.delta_mdf);
+  const rms = Number(result.delta_rms);
+  if (!Number.isFinite(mdf) || !Number.isFinite(rms)) return '';
+  const secs = result.analysed_seconds ? `${Math.round(result.analysed_seconds)} s ` : '';
+  const what = `${secs}${plainName(result)} hold`;
+  const smooth = (v) => Math.abs(Math.round(v));
+  const one = mdf === 0 ? 'held' : `${mdf < 0 ? 'fell' : 'rose'} ${smooth(mdf)}%`;
+  const two = rms === 0 ? 'held' : `${rms < 0 ? 'fell' : 'rose'} ${smooth(rms)}%`;
+  return `In the ${what}, median frequency ${one} and amplitude ${two}`;
+}
+
+function recommendation(model) {
+  const worst = model.worst;
+  if (!worst) return null;
+  const status = worst.status;
+  const plain = plainName(worst);
+  const measures = measuresClause(worst);
+  const run = model.canClaim ? runBefore(model, worst) : [];
+
+  const runLine = run.length
+    ? `${run.slice().reverse().map((c) => `${dayWord(c.ts)} ${VERDICT_WORD[c.status]}`).join(', ')}, `
+      + `today ${VERDICT_WORD[status]}. `
+    : '';
+  const opened = runLine ? runLine.charAt(0).toUpperCase() + runLine.slice(1) : '';
+
+  if (status === 'red') {
+    const again = run.length >= 1;
+    const evidence = measures
+      ? `${measures}, which is what a tiring muscle looks like`
+      : 'Both measures moved the way a tiring muscle moves';
+    return {
+      headline: again ? `Rest your ${plain} again.` : `Rest your ${plain} today.`,
+      lead: run.length >= 2
+        ? `${opened}${evidence}. Give it another day before you load it.`
+        : `${evidence}. Keep it unloaded today and check again tomorrow.`,
+    };
+  }
+  if (status === 'amber') {
+    const evidence = measures
+      ? `${measures}, which is early fatigue`
+      : 'One measure moved without the other, which is early fatigue';
+    return {
+      headline: run.length >= 1 ? `Go easy on your ${plain} again.` : `Go easy on your ${plain}.`,
+      lead: `${evidence}. Fewer sets today, then check again tomorrow.`,
+    };
+  }
+  const evidence = measures
+    ? `${measures}, which is what a recovered muscle looks like`
+    : 'Neither measure moved far, which is what a recovered muscle looks like';
+  return {
+    headline: `Train your ${plain} as planned.`,
+    lead: `${evidence}. Stop if anything hurts.`,
+  };
+}
+
 // ── painting ──────────────────────────────────────────────────────────────
 let homeSeq = 0;
 
@@ -1531,10 +1651,16 @@ function paintHome(model) {
   const verdict = $('#home-verdict'), more = $('#home-more');
   const savedWhen = model.at ? whenLabel(model.at) : '';
 
-  if (mode === 'measured' && claim) {
-    ask.textContent = `Checked ${(state.checkedAt || 'just now').toLowerCase()}`;
-    title.textContent = `Is your ${plain} ready?`;
-    lead.textContent = HOME_COPY[status](plain);
+  const rec = claim && (mode === 'measured' || mode === 'last') ? recommendation(model) : null;
+  const worstLine = model.multi && results.length
+    ? ` · worst of ${results.length}` : '';
+
+  if (rec) {
+    ask.textContent = mode === 'measured'
+      ? `Checked ${(state.checkedAt || 'just now').toLowerCase()}${worstLine}`
+      : `Last check · ${savedWhen}${worstLine}`;
+    title.textContent = rec.headline;
+    lead.textContent = rec.lead;
   } else if (mode === 'measured' || mode === 'last') {
     ask.textContent = savedWhen ? `Last check · ${savedWhen}` : 'Last check';
     title.textContent = `Check your ${plain} again`;
@@ -1554,12 +1680,13 @@ function paintHome(model) {
   } else {
     ask.textContent = 'No check yet';
     title.textContent = 'Check a muscle';
-    lead.textContent = 'Hold a steady contraction for 30 seconds. A 30-second hold '
-      + 'shows whether this muscle tires early.';
+    lead.textContent = 'A 30-second hold shows whether this muscle tires early.';
   }
 
   const showVerdict = claim && !stale && (mode === 'measured' || mode === 'last');
-  verdict.hidden = !showVerdict;
+  // The headline is the recommendation and the dial is the verdict, so the
+  // coloured pill would say the same thing a third time.
+  verdict.hidden = !showVerdict || !!rec;
   if (showVerdict) {
     verdict.querySelector('i').style.background = cssVar(VERDICT_CLASS[status]);
     verdict.querySelector('i').style.boxShadow = '';
@@ -1589,6 +1716,11 @@ function paintHome(model) {
     }
   }
 
+  // A returning athlete should not scroll past setup instructions to reach
+  // their own record.
+  const about = document.querySelector('#screen-home .about');
+  if (about) about.hidden = (state.history || []).length > 0;
+
   const dialWord = mode === 'none' ? 'NO CHECK'
     : mode === 'sample' ? 'SAMPLE'
       : mode === 'unreadable' ? 'NO READ'
@@ -1616,9 +1748,11 @@ function paintHome(model) {
     score: worst ? worst.score : 0,
     subject: mode === 'sample' || mode === 'none' ? '' : plain.toUpperCase(),
     word: dialWord,
+    scored: showVerdict,
     foot: mode === 'sample' ? 'NOT YOUR DATA'
-      : seconds && showVerdict ? `${seconds} S HOLD`
-        : mode === 'last' ? (savedWhen || '').toUpperCase() : '',
+      : showVerdict ? `${Math.round(worst ? worst.score : 0)} / 100`
+        : mode === 'unreadable' ? 'NO READING'
+          : seconds ? `${seconds} S HOLD` : '',
   }, dialKey);
 
   const replay = $('#home-replay');
