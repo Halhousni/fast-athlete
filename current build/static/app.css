@@ -788,6 +788,14 @@ details[open] > .about-more summary::after,
 
 .mobile-cta { display: none; }
 
+/* every chapter opens at the same height, so navigating does not jump */
+main > section:not(#screen-home) { padding-top: 78px; }
+/* empty states are notes, not panels: they do not run the width of the page */
+#train-body > .empty,
+#history-body > .empty,
+main > section:not(#screen-home) > .empty,
+main > section:not(#screen-home) > .panel { max-width: 720px; }
+
 @media (max-width: 940px) {
   .home { grid-template-columns: 1fr; gap: 8px; min-height: 0; }
   #screen-home { padding-bottom: 128px; }
