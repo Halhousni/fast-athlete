@@ -7,6 +7,10 @@ services:
         # Stamped into the image so a running container names its commit.
         FAST_BUILD: ${FAST_BUILD:-local}
     container_name: signal-analyzer
+    environment:
+      # The cookie is Secure whenever this is 1, whatever scheme the container
+      # sees behind the proxy.
+      FAST_COOKIE_SECURE: ${FAST_COOKIE_SECURE:-0}
     # One channel peaks near 60 MB and eight near 450 MB in one process,
     # measured on the bundled 8-channel demo. 1 GB leaves room for the two
     # analyses the app allows to run at once.

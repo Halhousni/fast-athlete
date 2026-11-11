@@ -1,14 +1,17 @@
-"""Storage: upload sessions in memory, profiles and results in SQLite.
+"""Storage: upload sessions in memory, accounts, sessions and results in SQLite.
 
-Two deliberate choices:
+Three deliberate choices:
 
 * Uploads live only in this process. They used to be pickled to a temporary
   directory as well, which survived nothing (the directory is new on every
   start) and filled the container's writable layer. An upload belongs to one
   assessment; 30 minutes is enough.
-* A profile PIN gates a short-lived session token. The token is what /history,
-  /save and DELETE check, so the guard is on the server rather than in the
-  browser.
+* An account is a username and a password. The password is hashed with scrypt
+  and never stored or logged; signing in issues a random session token whose
+  sha256 is what the database holds, so a copy of the database cannot be turned
+  into a set of working cookies.
+* The token is what /save, /history and DELETE check, so the guard is on the
+  server rather than in the browser.
 """
 from __future__ import annotations
 
@@ -24,12 +27,16 @@ import uuid
 
 import numpy as np
 
-SESSION_TTL_S = 30 * 60
+SESSION_TTL_S = 30 * 60          # an upload, not a person
 MAX_SESSIONS = 20
-TOKEN_TTL_S = 60 * 60
-PIN_ATTEMPTS = 5
-PIN_WINDOW_S = 15 * 60
-SCRYPT_N, SCRYPT_R, SCRYPT_P = 2 ** 14, 8, 1
+TOKEN_TTL_S = 30 * 24 * 60 * 60  # a signed-in athlete, for a month
+ATTEMPTS = 5
+WINDOW_S = 15 * 60
+SCRYPT_N, SCRYPT_R, SCRYPT_P = 2 ** 15, 8, 1
+SCRYPT_MAXMEM = 96 * 1024 * 1024     # 32 MiB per hash at n=2^15, plus headroom
+PASSWORD_MIN = 10
+PASSWORD_MAX = 128
+MAX_THROTTLE_KEYS = 5000             # attackers choose the keys; the dict must not grow
 
 
 class StoreError(Exception):
@@ -84,33 +91,50 @@ class SessionStore:
                        for c in v['channels'])
 
 
-# ── PIN handling ─────────────────────────────────────────────────────────────
+# ── passwords ────────────────────────────────────────────────────────────────
 
-def hash_pin(pin: str, salt: bytes | None = None) -> tuple[str, str]:
-    salt = salt or secrets.token_bytes(16)
-    digest = hashlib.scrypt(pin.encode(), salt=salt, n=SCRYPT_N, r=SCRYPT_R,
-                            p=SCRYPT_P, dklen=32)
-    return digest.hex(), salt.hex()
+def hash_password(password: str, n: int = SCRYPT_N, r: int = SCRYPT_R,
+                  p: int = SCRYPT_P) -> str:
+    """One string, carrying the cost as well as the salt.
+
+    Storing the parameters with the hash is what makes the cost raiseable: a
+    later build can hash at 2^16 and still verify every row written at 2^15.
+    """
+    salt = secrets.token_bytes(16)
+    digest = hashlib.scrypt(password.encode('utf-8'), salt=salt, n=n, r=r, p=p,
+                            dklen=32, maxmem=SCRYPT_MAXMEM)
+    return f'scrypt${n}${r}${p}${salt.hex()}${digest.hex()}'
 
 
-def verify_pin(pin: str, pin_hash: str, salt_hex: str) -> bool:
+def verify_password(password: str, stored: str | None) -> bool:
+    if not stored:
+        return False
     try:
+        scheme, n, r, p, salt_hex, want = stored.split('$')
+        if scheme != 'scrypt':
+            return False
         salt = bytes.fromhex(salt_hex)
+        digest = hashlib.scrypt(password.encode('utf-8'), salt=salt, n=int(n),
+                                r=int(r), p=int(p), dklen=len(want) // 2,
+                                maxmem=SCRYPT_MAXMEM)
     except (TypeError, ValueError):
         return False
-    candidate, _ = hash_pin(pin, salt)
-    return hmac.compare_digest(candidate, pin_hash)
+    return hmac.compare_digest(digest.hex(), want)
 
 
-def legacy_pin_hash(pin: str) -> str:
-    """The previous build's PIN hash, kept so existing profiles still open."""
-    return hashlib.sha256(('fast|' + pin).encode()).hexdigest()
+# Run once per failed sign-in on an unknown username, so that "no such account"
+# and "wrong password" take the same time to answer.
+_DUMMY_HASH = hash_password('fast-dummy-password')
+
+
+def burn_password_check() -> None:
+    verify_password('wrong', _DUMMY_HASH)
 
 
 class _Attempts:
     """A small in-process throttle. Restarting the container clears it."""
 
-    def __init__(self, limit: int = PIN_ATTEMPTS, window: int = PIN_WINDOW_S):
+    def __init__(self, limit: int = ATTEMPTS, window: int = WINDOW_S):
         self.limit, self.window = limit, window
         self._hits: dict[str, list[float]] = {}
         self._lock = threading.Lock()
@@ -125,8 +149,23 @@ class _Attempts:
                 self._hits.pop(key, None)
             return len(hits) >= self.limit
 
+    def count(self, key: str) -> int:
+        now = time.time()
+        with self._lock:
+            hits = [t for t in self._hits.get(key, []) if now - t < self.window]
+            if hits:
+                self._hits[key] = hits
+            else:
+                self._hits.pop(key, None)
+            return len(hits)
+
     def record(self, key: str) -> None:
         with self._lock:
+            if len(self._hits) >= MAX_THROTTLE_KEYS:
+                # Drop the oldest quarter rather than refuse to record.
+                oldest = sorted(self._hits, key=lambda k: self._hits[k][-1])
+                for key_ in oldest[:MAX_THROTTLE_KEYS // 4]:
+                    self._hits.pop(key_, None)
             self._hits.setdefault(key, []).append(time.time())
 
     def clear(self, key: str) -> None:
@@ -147,6 +186,7 @@ class Store:
         conn = sqlite3.connect(self.path, timeout=5.0)
         conn.row_factory = sqlite3.Row
         conn.execute('PRAGMA foreign_keys = ON')
+        conn.execute('PRAGMA secure_delete = ON')
         conn.execute('PRAGMA journal_mode = WAL')
         conn.execute('PRAGMA busy_timeout = 5000')
         return conn
@@ -177,42 +217,49 @@ class Store:
             );
             CREATE INDEX IF NOT EXISTS results_by_profile ON results(profile_id, ts DESC);
             ''')
+            # An existing database predates accounts. Add the two columns in
+            # place: the table holds the results of every check ever saved, and
+            # dropping it to change its shape would take those with it.
+            have = {row[1] for row in conn.execute('PRAGMA table_info(profiles)')}
+            for column in ('password_hash', 'password_salt'):
+                if column not in have:
+                    conn.execute(f'ALTER TABLE profiles ADD COLUMN {column} TEXT')
 
-    # profiles
-    def list_profiles(self) -> list[dict]:
-        with self._db() as conn:
-            rows = conn.execute('SELECT id, name, pin_hash IS NOT NULL AS has_pin '
-                                'FROM profiles ORDER BY name').fetchall()
-        return [dict(r) for r in rows]
-
-    def create_profile(self, name: str, pin: str | None) -> dict:
-        pin_hash = pin_salt = None
-        if pin:
-            pin_hash, pin_salt = hash_pin(pin)
+    # accounts
+    def create_account(self, username: str, password: str) -> dict:
+        password_hash, password_salt = hash_password(password), None
         try:
             with self._db() as conn:
                 cur = conn.execute(
-                    'INSERT INTO profiles(name, pin_hash, pin_salt, created_at) '
+                    'INSERT INTO profiles(name, password_hash, password_salt, created_at) '
                     'VALUES(?,?,?,?)',
-                    (name, pin_hash, pin_salt, _now()))
-                return dict(id=cur.lastrowid, name=name)
+                    (username, password_hash, password_salt, _now()))
+                return dict(id=cur.lastrowid, name=username)
         except sqlite3.IntegrityError as exc:
-            raise StoreError('That name is already taken') from exc
+            raise StoreError('That username is taken') from exc
 
-    def profile_by_name(self, name: str) -> sqlite3.Row | None:
+    def account_by_username(self, username: str) -> sqlite3.Row | None:
         with self._db() as conn:
             return conn.execute('SELECT * FROM profiles WHERE name=?',
-                                (name,)).fetchone()
+                                (username,)).fetchone()
 
-    def profile(self, profile_id: int) -> sqlite3.Row | None:
+    def account(self, account_id: int) -> sqlite3.Row | None:
         with self._db() as conn:
             return conn.execute('SELECT * FROM profiles WHERE id=?',
-                                (profile_id,)).fetchone()
+                                (account_id,)).fetchone()
 
-    def delete_profile(self, profile_id: int) -> bool:
+    def set_password(self, account_id: int, password: str) -> bool:
+        password_hash, password_salt = hash_password(password), None
         with self._db() as conn:
-            cur = conn.execute('DELETE FROM profiles WHERE id=?', (profile_id,))
-            conn.execute('DELETE FROM tokens WHERE profile_id=?', (profile_id,))
+            cur = conn.execute('UPDATE profiles SET password_hash=?, password_salt=? '
+                               'WHERE id=?', (password_hash, password_salt, account_id))
+            return cur.rowcount > 0
+
+    def delete_account(self, account_id: int) -> bool:
+        with self._db() as conn:
+            conn.execute('DELETE FROM tokens WHERE profile_id=?', (account_id,))
+            conn.execute('DELETE FROM results WHERE profile_id=?', (account_id,))
+            cur = conn.execute('DELETE FROM profiles WHERE id=?', (account_id,))
             return cur.rowcount > 0
 
     # tokens
@@ -225,6 +272,10 @@ class Store:
                          'VALUES(?,?,?)',
                          (_token_hash(token), profile_id, now + TOKEN_TTL_S))
         return token
+
+    def revoke_all(self, profile_id: int) -> None:
+        with self._db() as conn:
+            conn.execute('DELETE FROM tokens WHERE profile_id=?', (profile_id,))
 
     def token_profile(self, token: str | None) -> int | None:
         if not token:
@@ -241,13 +292,6 @@ class Store:
             return
         with self._db() as conn:
             conn.execute('DELETE FROM tokens WHERE token_hash=?', (_token_hash(token),))
-
-    def upgrade_pin(self, profile_id: int, pin: str) -> None:
-        """Replace a legacy unsalted hash with scrypt once the owner signs in."""
-        pin_hash, pin_salt = hash_pin(pin)
-        with self._db() as conn:
-            conn.execute('UPDATE profiles SET pin_hash=?, pin_salt=? WHERE id=?',
-                         (pin_hash, pin_salt, profile_id))
 
     # results
     def save_result(self, profile_id: int, avg_score, status: str,
