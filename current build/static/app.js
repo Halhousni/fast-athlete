@@ -944,6 +944,16 @@ function palette() {
   };
 }
 
+// Radius is area-proportional: a linear map crowds every low value into the
+// small inner ring and spreads the high ones thin on the outside, which reads
+// as a broken fan rather than a recording.
+const R_IN = 302;
+const R_OUT = 486;
+const radiusFor = (t) => {
+  const v = Math.max(0, Math.min(1, t));
+  return Math.sqrt(R_IN * R_IN + v * (R_OUT * R_OUT - R_IN * R_IN));
+};
+
 // ── the engraving, drawn once and reused ──────────────────────────────────
 // 120 strokes with their own gradients cost more than a frame budget allows on
 // a laptop without GPU acceleration, so it is rendered offscreen when the data
@@ -967,44 +977,40 @@ function engravingFor(strip, k, faint) {
   const base = faint ? 0.20 : 0.30;
   const { cols, rows, bytes } = strip;
 
-  // Radius is the dominant frequency, mapped across the range this recording
-  // actually used: a hold that sits on one narrow band would otherwise stack
-  // every hair on the rim and read as an empty disc.
-  const rowsUsed = [];
-  for (let n = 0; n < cols; n += 1) {
-    let best = 0, row = 0;
-    for (let i = 0; i < rows; i += 1) {
-      const v = bytes[i * cols + n];
-      if (v > best) { best = v; row = i; }
-    }
-    rowsUsed.push([row, best]);
-  }
-  const lowest = Math.min(...rowsUsed.map((x) => x[0]));
-  const highest = Math.max(...rowsUsed.map((x) => x[0]));
-  const span = Math.max(6, highest - lowest);
+  // One mark per (instant, frequency) cell that carries energy: angle is time,
+  // radius is frequency, brightness and length are power. The dominant
+  // frequency alone is too jumpy a signal to engrave -- it collapses most of a
+  // recording onto the inner ring and leaves the face empty.
+  const floor = 26;
+  const peak = Math.max(1, Math.max(...bytes));
 
   for (let n = 0; n < cols; n += 1) {
-    const [row, best] = rowsUsed[n];
     const theta = (n / cols) * Math.PI * 2 - Math.PI / 2;
-    const f = (row - lowest) / span;
-    const r = 236 + f * 184;
-    const len = 46 + (best / 255) * 96;
-    const inner = r - len * 0.45;
-    const outer = Math.min(r + len * 0.55, 448);
-    const g = ctx.createLinearGradient(cx + Math.cos(theta) * inner, cy + Math.sin(theta) * inner,
-                                       cx + Math.cos(theta) * outer, cy + Math.sin(theta) * outer);
-    g.addColorStop(0, pal.text);
-    g.addColorStop(0.5, pal.text);
-    g.addColorStop(1, pal.text);
-    ctx.beginPath();
-    ctx.moveTo(cx + Math.cos(theta) * inner, cy + Math.sin(theta) * inner);
-    ctx.lineTo(cx + Math.cos(theta) * outer, cy + Math.sin(theta) * outer);
-    ctx.strokeStyle = g;
-    ctx.lineWidth = 1.5 * k;
-    ctx.globalAlpha = base + Math.pow(best / 255, 0.55) * 0.5;
-    ctx.stroke();
-    ctx.globalAlpha = 1;
+    const cos = Math.cos(theta), sin = Math.sin(theta);
+    let top = 0;
+    for (let i = 0; i < rows; i += 1) {
+      const v = bytes[i * cols + n];
+      if (v > top) top = v;
+    }
+    if (top < floor) continue;
+    const cut = Math.max(floor, top * 0.34);
+    for (let i = 0; i < rows; i += 1) {
+      const v = bytes[i * cols + n];
+      if (v < cut) continue;
+      const level = v / peak;
+      const r = radiusFor(i / (rows - 1));
+      const len = (9 + level * 30) * Math.min(1.6, k * 0.8);
+      const a = base * 0.7 + Math.pow(level, 0.7) * 0.72;
+      ctx.globalAlpha = Math.min(1, a);
+      ctx.beginPath();
+      ctx.moveTo(cx + cos * (r - len * 0.5), cy + sin * (r - len * 0.5));
+      ctx.lineTo(cx + cos * (r + len * 0.5), cy + sin * (r + len * 0.5));
+      ctx.strokeStyle = pal.text;
+      ctx.lineWidth = 1.5 * Math.min(1.5, k * 0.9);
+      ctx.stroke();
+    }
   }
+  ctx.globalAlpha = 1;
 
   engraveCache = { key, canvas: c, k };
   return c;
@@ -1013,23 +1019,39 @@ function engravingFor(strip, k, faint) {
 const colsOf = (strip) => strip.cols || 120;
 
 // ── the dial ──────────────────────────────────────────────────────────────
-let dialFrame = 0;
+let dialLoop = 0;
 let dialPlayed = '';
+let dialStart = 0;
+let dialState = null;
 
 function animateDial(canvas, strip, opts, key) {
   if (!canvas) return;
-  if (dialFrame) { cancelAnimationFrame(dialFrame); dialFrame = 0; }
-  const instant = reduced || !key || key === dialPlayed;
-  dialPlayed = key || dialPlayed;
-  if (instant) { drawDial(canvas, strip, Object.assign({}, opts, { progress: 1 })); return; }
-  const start = performance.now();
-  const DURATION = 720;
+  // Repaints (profile arrives, strip arrives, theme changes) update the source
+  // and leave a running sweep alone: cancelling it here is what made the
+  // animation jump straight to its last frame on a normal load.
+  dialState = { canvas, strip, opts, key };
+  const playing = dialLoop !== 0;
+
+  if (reduced || !key || key === dialPlayed) {
+    if (!playing) drawDial(canvas, strip, Object.assign({}, opts, { progress: 1 }));
+    if (key) dialPlayed = key;
+    return;
+  }
+  if (playing) return;
+
+  dialStart = performance.now();
   const frame = (now) => {
-    const t = Math.min(1, (now - start) / DURATION);
-    drawDial(canvas, strip, Object.assign({}, opts, { progress: t }));
-    dialFrame = t < 1 ? requestAnimationFrame(frame) : 0;
+    const state = dialState;
+    const t = Math.min(1, (now - dialStart) / 760);
+    drawDial(state.canvas, state.strip, Object.assign({}, state.opts, { progress: t }));
+    if (t < 1) {
+      dialLoop = requestAnimationFrame(frame);
+    } else {
+      dialLoop = 0;
+      dialPlayed = state.key;
+    }
   };
-  dialFrame = requestAnimationFrame(frame);
+  dialLoop = requestAnimationFrame(frame);
 }
 
 function drawDial(canvas, strip, opts) {
@@ -1046,7 +1068,7 @@ function drawDial(canvas, strip, opts) {
   const p = options.progress === undefined ? 1 : options.progress;
   const clamp = (v) => Math.max(0, Math.min(1, v));
   const sweep = clamp(p / 0.68);          // the engraving finishes first
-  const chrome = clamp((p - 0.55) / 0.30); // rings and zones
+  const chrome = 0.38 + 0.62 * clamp((p - 0.30) / 0.45);  // rings are present from the start
   const word = clamp((p - 0.80) / 0.20);   // then the verdict
 
   if (strip && strip.bytes) {
@@ -1073,7 +1095,7 @@ function drawDial(canvas, strip, opts) {
       const f = strip.mdf[n];
       if (!f) continue;
       const theta = (n / colsOf(strip)) * Math.PI * 2 - Math.PI / 2;
-      const r = 236 + ((f - (strip.f0 || 1)) / ((strip.f1 || 35) - (strip.f0 || 1))) * 184;
+      const r = radiusFor((f - (strip.f0 || 1)) / ((strip.f1 || 35) - (strip.f0 || 1)));
       const x = cx + Math.cos(theta) * r, y = cy + Math.sin(theta) * r;
       if (!started) { ctx.moveTo(x, y); started = true; } else { ctx.lineTo(x, y); }
     }
@@ -1083,11 +1105,11 @@ function drawDial(canvas, strip, opts) {
     ctx.globalAlpha = 1;
   }
 
-  if (chrome <= 0) return;
+  // rings and zones stay visible while the data draws
 
   ctx.globalAlpha = chrome;
-  for (let ring = 0; ring < 6; ring += 1) {
-    ctx.beginPath(); ctx.arc(cx, cy, 170 + ring * 50, 0, Math.PI * 2);
+  for (let ring = 0; ring < 4; ring += 1) {
+    ctx.beginPath(); ctx.arc(cx, cy, 310 + ring * 48, 0, Math.PI * 2);
     ctx.strokeStyle = pal.line; ctx.globalAlpha = chrome * 0.45;
     ctx.lineWidth = 1.2 * k; ctx.stroke();
   }
@@ -1106,7 +1128,7 @@ function drawDial(canvas, strip, opts) {
     ctx.fillStyle = pal.text3;
     ctx.font = `600 ${Math.round(15 * k)}px ui-monospace, SFMono-Regular, Menlo, monospace`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText(ZONE_WORDS[z], cx + Math.cos(mid) * (R - 60), cy + Math.sin(mid) * (R - 60));
+    ctx.fillText(ZONE_WORDS[z], cx + Math.cos(mid) * (R - 44), cy + Math.sin(mid) * (R - 44));
   }
 
   if (!options.sample && status !== 'grey' && word > 0) {
@@ -1127,7 +1149,7 @@ function drawDial(canvas, strip, opts) {
   if (word <= 0) { ctx.globalAlpha = 1; return; }
   ctx.globalAlpha = 0.84 * word;
   ctx.fillStyle = pal.bg;
-  ctx.beginPath(); ctx.arc(cx, cy, 216, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(cx, cy, 292, 0, Math.PI * 2); ctx.fill();
 
   ctx.globalAlpha = word;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
@@ -1140,7 +1162,7 @@ function drawDial(canvas, strip, opts) {
   let size = 92 * Math.min(k, 2.2);
   const typeface = '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
   ctx.font = `300 ${size}px ${typeface}`;
-  while (size > 22 && ctx.measureText(label).width > 360) {
+  while (size > 22 && ctx.measureText(label).width > 420) {
     size *= 0.92;
     ctx.font = `300 ${size}px ${typeface}`;
   }
@@ -1150,10 +1172,7 @@ function drawDial(canvas, strip, opts) {
   ctx.font = `400 ${Math.round(19 * k)}px ui-monospace, SFMono-Regular, Menlo, monospace`;
   ctx.fillText(options.foot || '', cx, cy + 96 * Math.min(k, 2));
 
-  if (options.sample && strip && strip.bytes) {
-    ctx.font = `600 ${Math.round(14 * k)}px ui-monospace, SFMono-Regular, Menlo, monospace`;
-    ctx.fillText('SAMPLE', cx, cy + 176 * Math.min(k, 2));
-  }
+  // no watermark inside the face: the caption and the word already say it
   ctx.globalAlpha = 1;
 }
 
