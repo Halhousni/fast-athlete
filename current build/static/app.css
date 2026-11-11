@@ -122,7 +122,7 @@ body {
   display: flex; align-items: center; gap: 12px;
   padding: 16px 0 12px;
   position: sticky; top: 0; z-index: 20;
-  background: var(--bg);
+  background: transparent;   /* the body glow runs under the header, no seam */
   border-bottom: 1px solid transparent;
 }
 .topbar.scrolled { border-bottom-color: var(--line); }
@@ -582,7 +582,11 @@ body {
   display: grid; place-items: center;
 }
 .brand .mark svg { width: 18px; height: 18px; display: block; }
-.topbar.scrolled { backdrop-filter: blur(12px); background: color-mix(in srgb, var(--bg) 88%, transparent); }
+.topbar.scrolled {
+  backdrop-filter: blur(12px);
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  border-bottom-color: var(--line);
+}
 
 /* type scale up: the verdict has to carry the screen */
 h1 { font-size: clamp(32px, 4.4vw, 54px); line-height: 1.04; letter-spacing: -.03em;
