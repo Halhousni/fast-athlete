@@ -22,6 +22,57 @@
   </button>
 </header>
 
+<nav class="tabs" id="tabs" aria-label="Primary">
+  <div class="inner">
+    <div class="cursor" aria-hidden="true"></div>
+    <button class="tab" type="button" data-nav="home" aria-current="page">
+      <span class="num" aria-hidden="true">01</span>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><g class="glyph">
+        <path pathLength="60" d="M4.2 18.5A9 9 0 1 1 19.8 18.5"/>
+        <path pathLength="60" d="M12 5v2M4.2 9.5l1.74 1M19.8 9.5l-1.74 1"/>
+        <path pathLength="60" d="M12 14l3-5.2"/>
+        <circle pathLength="60" cx="12" cy="14" r="1.4"/>
+      </g></svg>
+      <span class="word">Today</span>
+    </button>
+    <button class="tab" type="button" data-nav="check" aria-current="false">
+      <span class="num" aria-hidden="true">02</span>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><g class="glyph">
+        <path pathLength="60" d="M4 8V4h4M16 4h4v4M20 16v4h-4M8 20H4v-4"/>
+        <path pathLength="60" d="M7 12h2.5l1.5-3 2 6 1.5-3H17"/>
+      </g></svg>
+      <span class="word">Check</span>
+    </button>
+    <button class="tab" type="button" data-nav="train" aria-current="false">
+      <span class="num" aria-hidden="true">03</span>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><g class="glyph">
+        <path pathLength="60" d="M4 12h16"/>
+        <circle pathLength="60" cx="6.6" cy="12" r="2.6"/>
+        <circle pathLength="60" cx="17.4" cy="12" r="2.6"/>
+        <path pathLength="60" d="M2.4 9.6v4.8M21.6 9.6v4.8"/>
+      </g></svg>
+      <span class="word">Train</span>
+    </button>
+    <button class="tab" type="button" data-nav="history" aria-current="false">
+      <span class="num" aria-hidden="true">04</span>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><g class="glyph">
+        <path pathLength="60" d="M4 12A8 8 0 1 0 8 5.1L4.5 7.1"/>
+        <path pathLength="60" d="M4.5 3.4v3.7h3.7"/>
+        <path pathLength="60" d="M12 8v4l3 1.8"/>
+      </g></svg>
+      <span class="word">History</span>
+    </button>
+    <button class="tab" type="button" data-nav="profile" aria-current="false">
+      <span class="num" aria-hidden="true">05</span>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><g class="glyph">
+        <circle pathLength="60" cx="12" cy="8.4" r="3.4"/>
+        <path pathLength="60" d="M4.9 19.4a7.4 7.4 0 0 1 14.2 0"/>
+      </g></svg>
+      <span class="word">You</span>
+    </button>
+  </div>
+</nav>
+
 <main class="wrap">
 
   <!-- ══ CHECK ══════════════════════════════════════════════════════════ -->
@@ -98,7 +149,7 @@
 
     <div id="stage-idle">
       <div class="verdict">
-        <p class="eyebrow">Check · 30 seconds</p>
+        <p class="eyebrow" data-n="02">Check · 30 seconds</p>
       <h1 id="check-title">Start a check</h1>
         <p class="lede">Measure how recovered each muscle is from a recording of its
           electrical activity, and see which ones can train today.</p>
@@ -164,51 +215,26 @@
 
   <!-- ══ TRAIN ═══════════════════════════════════════════════════════════ -->
   <section id="screen-train" class="hidden" aria-labelledby="train-title">
-    <p class="eyebrow">Today</p>
+    <p class="eyebrow" data-n="03">Train</p>
     <h1 id="train-title">What to train</h1>
     <div id="train-body"></div>
   </section>
 
   <!-- ══ HISTORY ═════════════════════════════════════════════════════════ -->
   <section id="screen-history" class="hidden" aria-labelledby="history-title">
-    <p class="eyebrow">History</p>
+    <p class="eyebrow" data-n="04">History</p>
     <h1 id="history-title">Every check</h1>
     <div id="history-body"></div>
   </section>
 
   <!-- ══ PROFILE ═════════════════════════════════════════════════════════ -->
   <section id="screen-profile" class="hidden" aria-labelledby="profile-title">
-    <p class="eyebrow">Profile</p>
+    <p class="eyebrow" data-n="05">Profile</p>
     <h1 id="profile-title">Who is checking?</h1>
     <div id="profile-body"></div>
   </section>
 
 </main>
-
-<nav class="tabs" id="tabs" aria-label="Sections">
-  <div class="inner">
-    <button class="tab" type="button" data-nav="home" aria-selected="true">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M4 11l8-7 8 7"/><path d="M6 10v9h12v-9"/></svg>
-      Home
-    </button>
-    <button class="tab" type="button" data-nav="check" aria-selected="false">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l2-5 3 10 2-5h5"/></svg>
-      Check
-    </button>
-    <button class="tab" type="button" data-nav="train" aria-selected="false">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6M7 7v10M17 7v10M20 9v6M7 12h10"/></svg>
-      Train
-    </button>
-    <button class="tab" type="button" data-nav="history" aria-selected="false">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V5"/><path d="M4 19h16"/><path d="M8 15v-4M13 15V7M18 15v-6"/></svg>
-      History
-    </button>
-    <button class="tab" type="button" data-nav="profile" aria-selected="false">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0"/></svg>
-      Profile
-    </button>
-  </div>
-</nav>
 
 <div class="overlay" id="sheet" hidden>
   <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title">
