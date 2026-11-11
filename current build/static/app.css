@@ -1,4 +1,6 @@
-a { text-decoration: underline; text-underline-offset: 3px; text-decoration-thickness: 1px; }
+/* no accent hue, so a link is ink plus an underline, never browser blue */
+a { color: inherit; text-decoration: underline; text-underline-offset: 3px; text-decoration-thickness: 1px; }
+a:hover { color: var(--text); text-decoration-thickness: 2px; }
 
 /* FAST — one token set, two themes, no accent doing two jobs.
 
@@ -815,12 +817,19 @@ details[open] > .about-more summary::after,
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--text-3);
 }
-.foot-dots { display: flex; gap: 8px; align-items: center; }
-.foot-dots i { width: 10px; height: 10px; display: block; border-radius: 50%; }
-.foot-dots i.green { background: var(--ok); }
-.foot-dots i.red { background: var(--bad); border-radius: 2px; transform: rotate(45deg); }
-.foot-dots i.amber { background: transparent; border: 2.5px solid var(--warn); }
-.foot-dots i.grey { background: var(--grey); opacity: .55; }
+/* the dates sit under the marks, so a run reads as a sequence of days */
+.foot-strip { display: flex; gap: 15px; align-items: flex-end; }
+.fs-item { display: flex; flex-direction: column; align-items: center; gap: 7px; }
+.fs-item .d { width: 10px; height: 10px; display: block; border-radius: 50%; }
+.fs-item .d.green { background: var(--ok); }
+.fs-item .d.red { background: var(--bad); border-radius: 2px; transform: rotate(45deg); }
+.fs-item .d.amber { background: transparent; border: 2.5px solid var(--warn); }
+.fs-item .d.grey { background: var(--grey); opacity: .55; }
+.fs-day {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 9.5px; letter-spacing: .1em; line-height: 1; color: var(--text-3);
+}
+.fs-item.live .fs-day { color: var(--text); }
 
 .mobile-cta { display: none; }
 
