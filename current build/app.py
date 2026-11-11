@@ -17,7 +17,7 @@ from pathlib import Path
 import numpy as np
 import uvicorn
 from fastapi import FastAPI, File, Form, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -115,9 +115,23 @@ def _valid_name(name: str) -> bool:
 
 # ── pages and assets ─────────────────────────────────────────────────────────
 
+_INDEX = None
+
+
 @app.get('/')
 async def index():
-    return FileResponse(BASE / 'templates' / 'index.html', media_type='text/html')
+    """Serve the page with this build's id on every asset.
+
+    Without it the browser keeps the old app.js after a deploy and runs it
+    against new markup, which looks like a broken feature rather than a stale
+    cache.
+    """
+    global _INDEX
+    if _INDEX is None:
+        _INDEX = (BASE / 'templates' / 'index.html').read_text(encoding='utf-8')
+    tag = version.build_id()
+    page = _INDEX.replace('{{v}}', tag)
+    return HTMLResponse(page, headers={'Cache-Control': 'no-cache'})
 
 
 @app.get('/demo.mp4')
