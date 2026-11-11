@@ -115,7 +115,7 @@ def _valid_name(name: str) -> bool:
 
 # ── pages and assets ─────────────────────────────────────────────────────────
 
-_INDEX = None
+_INDEX = {'mtime': None, 'text': None}
 
 
 @app.get('/')
@@ -127,10 +127,12 @@ async def index():
     cache.
     """
     global _INDEX
-    if _INDEX is None:
-        _INDEX = (BASE / 'templates' / 'index.html').read_text(encoding='utf-8')
+    page_file = BASE / 'templates' / 'index.html'
+    stamp = page_file.stat().st_mtime
+    if _INDEX['mtime'] != stamp:
+        _INDEX = {'mtime': stamp, 'text': page_file.read_text(encoding='utf-8')}
     tag = version.build_id()
-    page = _INDEX.replace('{{v}}', tag)
+    page = _INDEX['text'].replace('{{v}}', tag)
     return HTMLResponse(page, headers={'Cache-Control': 'no-cache'})
 
 
