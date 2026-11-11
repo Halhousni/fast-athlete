@@ -126,22 +126,61 @@ function toggleTheme() {
 }
 
 // ── navigation ──────────────────────────────────────────────────────────────
-function nav(screen) {
+const SCREENS = ['home', 'check', 'train', 'history', 'profile'];
+
+function nav(screen, opts) {
+  const options = opts || {};
+  if (!SCREENS.includes(screen)) screen = 'home';
+  const changed = state.screen !== screen || options.force;
   state.screen = screen;
+
   // Opening Home after a pause replays the sweep: an entrance that only ever
   // fires on the first paint is an entrance nobody sees.
   if (screen === 'home' && Date.now() - dialLastPlay > 20_000) dialNonce += 1;
-  for (const name of ['home', 'check', 'train', 'history', 'profile']) {
+
+  for (const name of SCREENS) {
     $('#screen-' + name).classList.toggle('hidden', name !== screen);
   }
-  document.querySelectorAll('.tab').forEach((tab) => {
-    tab.setAttribute('aria-selected', String(tab.dataset.nav === screen));
+
+  // aria-current, not aria-selected: a button is not a tab, and screen readers
+  // announce "current page" this way.
+  const tabs = [...document.querySelectorAll('.tab')];
+  tabs.forEach((tab) => {
+    const on = tab.dataset.nav === screen;
+    tab.setAttribute('aria-current', on ? 'page' : 'false');
   });
-  window.scrollTo({ top: 0 });
+  const at = tabs.findIndex((tab) => tab.dataset.nav === screen);
+  const inner = $('#tabs .inner');
+  if (inner && at >= 0) inner.style.setProperty('--i', String(at));
+
+  if (!options.keepScroll) window.scrollTo({ top: 0 });
+
+  if (changed && !options.silent) {
+    const hash = '#' + screen;
+    if (location.hash !== hash) {
+      if (options.replace) history.replaceState({ screen }, '', hash);
+      else history.pushState({ screen }, '', hash);
+    }
+  }
+
   if (screen === 'home') renderHome();
   if (screen === 'train') renderTrain();
   if (screen === 'history') loadHistory();
   if (screen === 'profile') renderProfile();
+
+  // take the reader to the heading, so the page announces where it went
+  if (!options.silent) {
+    const heading = $('#screen-' + screen + ' h1');
+    if (heading) {
+      heading.setAttribute('tabindex', '-1');
+      heading.focus({ preventScroll: true });
+    }
+  }
+}
+
+function screenFromHash() {
+  const name = (location.hash || '').replace('#', '');
+  return SCREENS.includes(name) ? name : 'home';
 }
 
 function setStage(stage) {
@@ -951,9 +990,9 @@ function palette() {
 // The approved reference (001-etched-disc), ported: one hair per instant, a
 // gradient that fades at both ends so the marks read as engraving, a second
 // register of short ticks behind them, and a verdict line through the ridge.
-const RING = 540;
+const RING = 500;
 const ART_IN = 140;
-const ART_SPAN = 380;
+const ART_SPAN = 356;
 const COLS_FALLBACK = 120;
 const ART = (t) => ART_IN + Math.max(0, Math.min(1, t)) * ART_SPAN;
 
@@ -1062,7 +1101,7 @@ function engravingFor(strip, faint) {
   const ctx = c.getContext('2d');
   const cx = W / 2, cy = W / 2;
   const colour = palette().text;
-  const dim = faint ? 0.55 : 1;
+  const dim = faint ? 0.9 : 1;
 
   // the flank: short ticks at the foot of each column's energy, behind the hair
   for (let n = 0; n < cols; n += 1) {
@@ -1091,9 +1130,9 @@ function engravingFor(strip, faint) {
     g.addColorStop(0, 'transparent');
     g.addColorStop(0.5, colour);
     g.addColorStop(1, 'transparent');
-    ctx.globalAlpha = (0.20 + hair.p * 0.62) * dim;
+    ctx.globalAlpha = (0.30 + hair.p * 0.58) * dim;
     ctx.strokeStyle = g;
-    ctx.lineWidth = 1.5;
+    ctx.lineWidth = 2.2;
     ctx.beginPath();
     ctx.moveTo(cx + cos * hair.inner, cy + sin * hair.inner);
     ctx.lineTo(cx + cos * hair.outer, cy + sin * hair.outer);
@@ -1184,19 +1223,19 @@ function drawDial(canvas, strip, opts) {
     const active = ZONE_WORDS[z] === DIAL_WORD[status];
     ctx.beginPath(); ctx.arc(cx, cy, RING, a0, a1);
     ctx.strokeStyle = pal[ZONE_TOKENS[z].slice(2)];
-    ctx.globalAlpha = ringIn * (options.sample ? 0.10 : (active ? 0.30 : 0.14));
+    ctx.globalAlpha = ringIn * (options.sample ? 0.22 : (active ? 0.30 : 0.14));
     ctx.lineWidth = 14; ctx.stroke();
 
     const mid = (a0 + a1) / 2;
-    ctx.globalAlpha = ringIn * 0.42;
+    ctx.globalAlpha = ringIn * (options.sample ? 0.30 : 0.52);
     ctx.fillStyle = pal.text;
-    ctx.font = `500 ${Math.round(14 * typeK)}px ui-monospace, SFMono-Regular, Menlo, monospace`;
+    ctx.font = `500 ${Math.round(29 * typeK)}px ui-monospace, SFMono-Regular, Menlo, monospace`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     const label = ZONE_WORDS[z];
     const w = ctx.measureText(label).width;
     const lx = Math.max(w / 2 + 8, Math.min(W - w / 2 - 8,
-      cx + Math.cos(mid) * (RING + 28)));
-    ctx.fillText(label, lx, cy + Math.sin(mid) * (RING + 28));
+      cx + Math.cos(mid) * (RING + 38)));
+    ctx.fillText(label, lx, cy + Math.sin(mid) * (RING + 38));
   }
 
   // the engraving, revealed by the stylus rather than a wedge
@@ -1251,7 +1290,7 @@ function drawDial(canvas, strip, opts) {
 
   // the line that carries the verdict
   const planeOf = strip && strip.bytes ? planeFor(strip) : null;
-  if (strip && strip.mdf && strip.mdf.length) {
+  if (strip && strip.mdf && strip.mdf.length && !options.sample) {
     const upto = Math.round((strip.mdf.length - 1) * clamp(travel * 1.05));
     ctx.beginPath();
     let started = false;
@@ -2213,7 +2252,7 @@ function wire() {
 }
 
 wire();
-nav('home');
+nav(screenFromHash(), { silent: true, replace: true });
 // The cookie outlives a reload, so the server is asked who it belongs to;
 // otherwise a shared device looks signed out while the session is still live.
 api('/profiles/me')
@@ -2224,3 +2263,8 @@ api('/profiles/me')
     if (state.screen === 'profile') renderProfile();
     if (state.screen === 'home') renderHome();
   });
+
+// The back gesture should walk the sections, not leave the app.
+window.addEventListener('popstate', () => {
+  nav(screenFromHash(), { silent: true, replace: true, keepScroll: false });
+});
