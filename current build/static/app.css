@@ -485,11 +485,25 @@ body {
 .topbar.scrolled { backdrop-filter: blur(12px); background: color-mix(in srgb, var(--bg) 88%, transparent); }
 
 /* type scale up: the verdict has to carry the screen */
-h1 { font-size: clamp(30px, 4.6vw, 44px); line-height: 1.06; letter-spacing: -.035em; font-weight: 700; }
+h1 { font-size: clamp(32px, 4.4vw, 54px); line-height: 1.04; letter-spacing: -.03em;
+     font-weight: 300; }
+.eyebrow {
+  display: flex; align-items: center; gap: 12px; margin-bottom: 14px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px; letter-spacing: .15em; text-transform: uppercase; color: var(--text-3);
+}
+.eyebrow::before { content: ""; width: 26px; height: 1px; background: currentColor; }
 h2 { font-size: clamp(20px, 2.2vw, 24px); letter-spacing: -.02em; }
 h3 { font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: var(--text-3); font-weight: 600; }
 
 /* surfaces */
+.empty {
+  display: block; text-align: left; padding: 22px;
+}
+.empty svg { width: 20px; height: 20px; color: var(--text-3); margin-bottom: 12px; }
+.empty p { max-width: 46ch; font-size: 14.5px; line-height: 1.55; color: var(--text-2); }
+.empty .btn { width: auto; min-width: 0; margin-top: 16px; padding: 12px 18px; }
+
 .card {
   border-radius: var(--radius-card);
   background: var(--surface);
@@ -572,8 +586,8 @@ canvas.plane { width: 100%; height: auto; display: block; }
 .ask {
   display: flex; align-items: center; gap: 12px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px; letter-spacing: .15em; text-transform: uppercase;
-  color: var(--text-3); margin-bottom: 18px;
+  font-size: 11px; letter-spacing: .15em; text-transform: uppercase;
+  color: var(--text-3); margin-bottom: 16px;
 }
 .ask i { display: block; width: 26px; height: 1px; background: currentColor; }
 .home h1 {
@@ -591,6 +605,7 @@ canvas.plane { width: 100%; height: auto; display: block; }
   color: var(--text-2);
 }
 .home-cta { margin-top: 26px; display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
+.home-cta .btn { width: auto; min-width: 0; padding-left: 22px; padding-right: 22px; }
 .home-cta .hint {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 11px; letter-spacing: .1em; color: var(--text-3);
@@ -598,32 +613,39 @@ canvas.plane { width: 100%; height: auto; display: block; }
 
 /* the way from "red" to "why" */
 .more { margin-top: 22px; }
-.more-btn {
-  display: flex; align-items: center; gap: 9px; background: none; border: 0;
-  padding: 12px 0; cursor: pointer; color: var(--text);
-  font-size: 16px; font-weight: 500; letter-spacing: -.01em;
+.more-btn,
+.about-more summary,
+.det-more summary {
+  display: flex; align-items: center; gap: 9px; cursor: pointer;
+  list-style: none; min-height: 44px; padding: 10px 0;
+  color: var(--text); font-size: 15px; font-weight: 500; letter-spacing: -.01em;
 }
-.more-btn::after { content: "+"; color: var(--text-3); font-weight: 400; }
-.more-btn.open::after { content: "–"; }
-.answer { display: none; margin-top: 2px; max-width: 42ch; }
-.answer.open { display: block; }
+.more-btn::-webkit-details-marker,
+.det-more summary::-webkit-details-marker,
+.about-more summary::-webkit-details-marker { display: none; }
+.more-btn::after,
+.det-more summary::after,
+.about-more summary::after { content: "+"; color: var(--text-3); font-weight: 400; margin-left: auto; }
+details[open] > .more-btn::after,
+details[open] > .about-more summary::after,
+.det-more[open] > summary::after { content: "–"; }
+.answer { margin-top: 2px; max-width: 42ch; }
 .answer p { font-size: 14.5px; line-height: 1.62; color: var(--text-2); }
 .home .safety {
   margin-top: 18px; max-width: 42ch;
   color: var(--text-2); font-size: 13.5px; line-height: 1.55;
   border-left: 2px solid var(--warn); padding-left: 12px;
 }
-.answer .det {
-  margin-top: 14px; background: none; border: 0; cursor: pointer;
+.det-more { margin-top: 10px; border-top: 1px solid var(--line); }
+.det-more summary {
   color: var(--text-3); font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase;
-  border-bottom: 1px solid var(--line-strong); padding: 0 0 3px;
+  font-size: 11px; letter-spacing: .12em; text-transform: uppercase; font-weight: 500;
 }
-.det-list { display: none; grid-template-columns: auto 1fr; gap: 5px 20px; margin-top: 12px; }
-.det-list.open { display: grid; }
+.det-list { display: grid; grid-template-columns: auto 1fr; gap: 6px 20px; padding: 4px 0 14px; }
+.det-more:not([open]) .det-list { display: none; }
 .det-list dt {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 9.5px; letter-spacing: .12em; text-transform: uppercase;
+  font-size: 11px; letter-spacing: .1em; text-transform: uppercase;
   color: var(--text-3); padding-top: 3px;
 }
 .det-list dd {
@@ -637,7 +659,7 @@ canvas.plane { width: 100%; height: auto; display: block; }
 .disc-label {
   margin-top: 16px; text-align: center;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 10px; letter-spacing: .15em; text-transform: uppercase; color: var(--text-3);
+  font-size: 11px; letter-spacing: .13em; text-transform: uppercase; color: var(--text-3);
 }
 
 .home-foot {
@@ -646,15 +668,20 @@ canvas.plane { width: 100%; height: auto; display: block; }
 }
 .foot-txt {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--text-3);
+  font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--text-3);
 }
-.foot-dots { display: flex; gap: 7px; }
-.foot-dots i { width: 9px; height: 9px; border-radius: 50%; display: block; }
+.foot-dots { display: flex; gap: 8px; align-items: center; }
+.foot-dots i { width: 10px; height: 10px; display: block; border-radius: 50%; }
+.foot-dots i.green { background: var(--ok); }
+.foot-dots i.red { background: var(--bad); border-radius: 2px; transform: rotate(45deg); }
+.foot-dots i.amber { background: transparent; border: 2.5px solid var(--warn); }
+.foot-dots i.grey { background: var(--grey); opacity: .55; }
 
 .mobile-cta { display: none; }
 
 @media (max-width: 940px) {
   .home { grid-template-columns: 1fr; gap: 8px; min-height: 0; }
+  #screen-home { padding-bottom: 128px; }
   .disc { order: -1; }
   .disc canvas { max-width: 340px; }
   .home h1 { font-size: 34px; }
@@ -672,5 +699,45 @@ canvas.plane { width: 100%; height: auto; display: block; }
     width: 100%; height: 56px; border: 0; border-radius: 12px;
     background: var(--accent); color: var(--accent-ink);
     font-size: 15px; font-weight: 600; letter-spacing: .02em; cursor: pointer;
+  }
+}
+
+/* ── what the app is ───────────────────────────────────────────────────── */
+.about { margin-top: 26px; }
+.about-row {
+  display: grid; gap: 0; border-top: 1px solid var(--line);
+}
+@media (min-width: 760px) { .about-row { grid-template-columns: repeat(3, 1fr); } }
+.about-row > div { padding: 14px 18px 14px 0; border-bottom: 1px solid var(--line); }
+@media (min-width: 760px) {
+  .about-row > div { border-bottom: 0; border-right: 1px solid var(--line); padding-right: 20px; }
+  .about-row > div:last-child { border-right: 0; }
+}
+.about-row span {
+  display: block; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--text-3);
+  margin-bottom: 6px;
+}
+.about-row p { font-size: 13.5px; line-height: 1.5; color: var(--text-2); }
+.about-more { margin-top: 4px; border-bottom: 1px solid var(--line); }
+.about-more summary {
+  cursor: pointer; list-style: none; padding: 14px 0;
+  display: flex; align-items: center; gap: 9px;
+  font-size: 14px; color: var(--text); font-weight: 500;
+}
+.about-more summary::-webkit-details-marker { display: none; }
+.about-more summary::after { content: "+"; color: var(--text-3); margin-left: auto; }
+.about-more[open] summary::after { content: "–"; }
+.about-more p {
+  font-size: 13.5px; line-height: 1.6; color: var(--text-2);
+  max-width: 60ch; padding-bottom: 12px;
+}
+
+/* the copy column arrives a beat after the dial starts drawing */
+@media (prefers-reduced-motion: no-preference) {
+  .home-copy { animation: rise .45s cubic-bezier(.2,.7,.2,1) .1s both; }
+  @keyframes rise {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: none; }
   }
 }
