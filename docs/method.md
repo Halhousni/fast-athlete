@@ -4,9 +4,11 @@ One recording of one muscle, from the start of a held contraction to its end. Th
 question is whether that muscle tires early. FAST answers with two changes and
 turns them into a score.
 
-The method follows Zhao, Charoonsrisawad, Ichiyama and Chakrabarty (2025): as a
-muscle fatigues, the median frequency of its surface EMG falls and its amplitude
-rises. Neither alone is enough. A frequency drop with no amplitude change can be
+The method follows Zhao, Charoonsrisawad, Ichiyama and Chakrabarty (2025), *A
+non-invasive, quantitative method for detection of muscle fatigue and neural
+mechanism of compensation during muscle fatigue* (Cambridge Open Engage,
+doi:10.33774/coe-2025-j3v1z): as a muscle fatigues, the median frequency of its
+surface EMG falls and its amplitude rises. Neither alone is enough. A frequency drop with no amplitude change can be
 a change in electrode contact; amplitude rising without a frequency drop can be
 more motor units firing.
 
