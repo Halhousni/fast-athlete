@@ -1578,6 +1578,17 @@ function dayWord(iso) {
   return new Intl.DateTimeFormat(undefined, { weekday: 'short' }).format(d);
 }
 
+function shortDay(iso) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const now = new Date();
+  const midnight = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const days = Math.round((midnight(now) - midnight(d)) / 864e5);
+  if (days <= 0) return 'TODAY';
+  if (days === 1) return 'YEST';
+  return new Intl.DateTimeFormat(undefined, { weekday: 'short' }).format(d).toUpperCase();
+}
+
 function measuresClause(result) {
   const mdf = Number(result.delta_mdf);
   const rms = Number(result.delta_rms);
@@ -1775,34 +1786,54 @@ function paintHome(model) {
     : mode === 'last' || mode === 'measured' ? 'from your last saved check'
       : mode === 'sample' ? 'sample recording, not yours' : '';
 
-  // the foot: one mark per check, newest on the right
+  // The foot is a dated strip of this muscle's checks, so the run sentence above
+  // has something to point at. Another muscle's check says nothing about this one.
   const foot = $('#home-foot');
   foot.replaceChildren();
-  const history = (state.history || []).slice(0, 11).reverse();
-  const marks = history.length
-    ? history.map((row) => row.status || 'grey')
-    : (showVerdict ? [status] : []);
+  const target = (mode === 'measured' || mode === 'last') && worst ? worst : null;
+  const saved = (state.history || [])
+    .filter((row) => Array.isArray(row.results) && row.results.length)
+    .map((row) => {
+      const hit = target ? sameMuscle(row.results, target) : worstOf(row.results);
+      return hit ? { status: hit.status, ts: row.ts } : null;
+    })
+    .filter(Boolean)
+    .slice(0, 6)
+    .reverse();                                  // oldest on the left
+  const marks = saved.slice();
+  if (mode === 'measured' && target) {
+    // an earlier check today is replaced, not repeated: two marks under one date
+    // read as a bug
+    const liveDay = new Date().toDateString();
+    while (marks.length && new Date(marks[marks.length - 1].ts).toDateString() === liveDay) {
+      marks.pop();
+    }
+    marks.push({ status, ts: Date.now(), live: true });
+  }
   if (!marks.length) {
     foot.append(el('span', { class: 'foot-txt', text: 'No checks yet' }));
     return;
   }
-  const counts = marks.reduce((acc, s) => {
-    acc[s] = (acc[s] || 0) + 1;
-    return acc;
-  }, {});
-  const summary = Object.entries(counts).map(([s, n]) => `${n} ${zoneWord(s)}`).join(', ');
+
+  const what = target ? plainName(worst) : '';
+  const summary = marks
+    .map((m) => `${dayWord(m.ts)} ${zoneWord(m.status)}`).join(', ');
   foot.append(el('span', {
     class: 'foot-txt',
-    text: marks.length === 1 ? '1 check' : `last ${marks.length} checks`,
+    text: marks.length === 1
+      ? `${what ? `${what} · ` : ''}first check`
+      : `${what ? `${what} · ` : ''}last ${marks.length} checks`,
   }));
-  const dots = el('span', { class: 'foot-dots', role: 'img', 'aria-label': summary });
-  for (const s of marks) {
-    dots.append(el('i', { class: `d ${s}`, title: zoneWord(s) }));
+  const rail = el('span', {
+    class: 'foot-strip', role: 'img',
+    'aria-label': `${what ? `${what}, ` : ''}${summary}`,
+  });
+  for (const m of marks) {
+    rail.append(el('span', { class: `fs-item${m.live ? ' live' : ''}` },
+      el('i', { class: `d ${m.status}`, title: `${dayWord(m.ts)} ${zoneWord(m.status)}` }),
+      el('span', { class: 'fs-day', text: shortDay(m.ts) })));
   }
-  foot.append(dots);
-  if (marks.length > 1) {
-    foot.append(el('span', { class: 'foot-txt', text: 'newest on the right' }));
-  }
+  foot.append(rail);
 }
 
 async function renderHome() {
@@ -2191,6 +2222,9 @@ function aboutCard() {
     el('h3', { text: 'About FAST Athlete' }),
     el('p', { class: 'meta mt-8', text: 'FAST Athlete reads surface EMG from one muscle at a time and says whether it is ready to train. Scores run from 0 to 100: 70 and above is ready, 40 to 69 is go easy, below 40 is rest. Checks you save are stored on this server, in your account.' }),
     el('p', { class: 'meta mt-8', text: 'The method is a research prototype. It is not a diagnosis.' }),
+    el('p', { class: 'meta mt-8' },
+      el('a', { href: 'https://github.com/Halhousni/fast-athlete', target: '_blank', rel: 'noopener',
+        text: 'Source on GitHub' })),
     el('p', { class: 'meta mt-12', id: 'version-line', text: '' }));
 }
 
