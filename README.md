@@ -1,7 +1,7 @@
 # FAST Athlete
 
-Muscle fatigue from surface EMG. One recording, one muscle, one answer: ready,
-go easy, or rest, with the two numbers that produced it.
+FAST Athlete reads a surface EMG recording and says what to do with the muscle
+today: train it, go easy on it, or rest it.
 
 ![The home screen after a check](docs/screenshot.png)
 
@@ -22,9 +22,8 @@ signal changed between the start of the hold and the end, and scores it.
 - **Rest** means both moved a lot. Leave the muscle unloaded and check again
   tomorrow.
 
-The recommendation reads your saved checks as well as the recording, so a muscle
-that has read the same or worse for a few days gets told to rest longer. The
-wording never claims a trend it cannot see: two checks are two checks.
+The advice also takes your saved checks into account, so a muscle that has read
+the same or worse for several days is told to rest longer.
 
 ## Quick start
 
@@ -65,21 +64,16 @@ The method follows Zhao, Charoonsrisawad, Ichiyama and Chakrabarty (2025).
 
 ## Accounts
 
-An account is a username and a password. Passwords are hashed with scrypt at
-n=2^15, with the cost and salt inside the stored string so it can be raised
-later. A session is a random token whose sha256 the database holds, so a copy of
-the database cannot be turned into working cookies. The cookie is HttpOnly,
-SameSite=Lax, thirty days, and Secure when `FAST_COOKIE_SECURE=1`.
+You can use the app without one. An account only exists to keep your checks, so
+the advice can compare this week with the last.
 
-Five wrong attempts per account and address are throttled for fifteen minutes,
-and twelve per account name, because behind a proxy every request looks like the
-proxy and a single attacker could otherwise lock an athlete out. Sign-in gives
-the same answer and the same timing for a missing account and a wrong password.
-Nobody can list the accounts on a server. Deleting an account asks for the
-password again.
+An account is a username and a password, stored on the server that runs the app.
+Nothing is sent anywhere else, and no one can browse the list of accounts. To
+leave, delete the account from the You screen; it asks for your password and
+removes your saved checks with it.
 
-There is no email on the server, so the reset path is the operator command. It
-prompts on the terminal, which keeps the password out of shell history:
+There is no email on the server, so a forgotten password is reset by whoever
+runs it:
 
 ```bash
 docker compose exec signal-analyzer python3 store.py passwd <username>
